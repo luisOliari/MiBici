@@ -18,6 +18,7 @@ function extractRouteSteps(geojson) {
       instruction: step.instruction,
       distanceMeters: step.distance,
       streetName: step.name,
+      vertexIndex: idx,
       lat,
       lon,
     };

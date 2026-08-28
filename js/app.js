@@ -27,10 +27,15 @@ const state = {
   addressSearchToken: 0,
   navSteps: [],
   navIndex: 0,
-  navWatchId: null,
+  routeVertices: null,
+  routeCumDist: null,
   wakeLock: null,
   isNavigating: false,
   cardExpanded: false,
+  liveWatchId: null,
+  trailLayer: null,
+  lastTrailPoint: null,
+  permissionErrorShown: false,
 };
 
 function haversineMeters(lat1, lon1, lat2, lon2) {
@@ -128,6 +133,9 @@ function initMap(lat, lon) {
     maxZoom: 19,
   }).addTo(state.map);
   L.control.zoom({ position: "bottomright" }).addTo(state.map);
+
+  // Estela del recorrido real (se va dibujando con tu posicion en vivo).
+  state.trailLayer = L.polyline([], { color: "#1e293b", weight: 3, opacity: 0.55 }).addTo(state.map);
 }
 
 function placeUserMarker(lat, lon) {
@@ -206,6 +214,8 @@ function updateDaylightNote(tripEtaDate) {
 }
 
 // --- Geolocalizacion ---
+const TRAIL_MIN_MOVE_METERS = 8; // no agregar puntos a la estela si estas practicamente quieto
+
 function onLocationReady(lat, lon, { fallback } = {}) {
   state.userLocation = { lat, lon };
 
@@ -219,6 +229,8 @@ function onLocationReady(lat, lon, { fallback } = {}) {
     fallback ? "No se pudo acceder a tu ubicación — mostrando zona de ejemplo (Centro)" : null,
     fallback ? "error" : undefined
   );
+
+  if (!fallback) startLiveTracking();
 }
 
 function requestGeolocation() {
@@ -242,6 +254,43 @@ function requestGeolocation() {
     },
     { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 }
   );
+}
+
+// Seguimiento CONTINUO de posicion (como Waze): actualiza tu marcador, deja
+// una estela de por donde pasaste, y si hay navegacion por voz activa hace
+// avanzar las indicaciones y sigue tu posicion en el mapa. Arranca una sola
+// vez y queda corriendo mientras la app este abierta.
+function startLiveTracking() {
+  if (state.liveWatchId !== null || !navigator.geolocation) return;
+
+  state.liveWatchId = navigator.geolocation.watchPosition(
+    (pos) => onLiveLocation(pos.coords.latitude, pos.coords.longitude),
+    (err) => {
+      console.warn("Live tracking error:", err.code, err.message);
+      // Solo molestamos una vez por permiso bloqueado; los timeouts pasajeros
+      // en movimiento (tunel, mala señal) no ameritan interrumpir el viaje.
+      if (err.code === 1 && !state.permissionErrorShown) {
+        state.permissionErrorShown = true;
+        setStatus("Se perdió el permiso de ubicación en tiempo real — revisalo en Ajustes", "error");
+      }
+    },
+    { enableHighAccuracy: true, maximumAge: 4000, timeout: 20000 }
+  );
+}
+
+function onLiveLocation(lat, lon) {
+  state.userLocation = { lat, lon };
+  placeUserMarker(lat, lon);
+
+  if (!state.lastTrailPoint || haversineMeters(state.lastTrailPoint[0], state.lastTrailPoint[1], lat, lon) >= TRAIL_MIN_MOVE_METERS) {
+    state.trailLayer?.addLatLng([lat, lon]);
+    state.lastTrailPoint = [lat, lon];
+  }
+
+  if (state.isNavigating) {
+    state.map.panTo([lat, lon], { animate: true });
+    updateNavProgress(lat, lon);
+  }
 }
 
 // --- Buscador de direcciones (Nominatim) para origen/destino ---
@@ -469,6 +518,7 @@ async function calculateRoute() {
           [state.destLocation.lon, state.destLocation.lat],
         ],
         elevation: true,
+        language: "es", // sin esto, las instrucciones de voz vienen en ingles
       }),
     });
 
@@ -527,6 +577,23 @@ async function calculateRoute() {
     stopVoiceNavigation();
     state.navSteps = extractRouteSteps(geojson);
     state.navIndex = 0;
+
+    // Distancia acumulada a lo largo de la ruta, punto a punto. La usamos
+    // para saber "cuanto llevas recorrido" comparando tu posicion contra el
+    // vertice mas cercano, en vez de exigir que pises un radio exacto (eso
+    // se podia trabar para siempre si el GPS no coincidia justo ahi).
+    state.routeVertices = geojson.features[0].geometry.coordinates.map((c) => [c[1], c[0]]);
+    state.routeCumDist = [0];
+    for (let i = 1; i < state.routeVertices.length; i++) {
+      const [lat1, lon1] = state.routeVertices[i - 1];
+      const [lat2, lon2] = state.routeVertices[i];
+      state.routeCumDist.push(state.routeCumDist[i - 1] + haversineMeters(lat1, lon1, lat2, lon2));
+    }
+    state.navSteps.forEach((s) => {
+      s.cumDist = state.routeCumDist[s.vertexIndex] ?? 0;
+      s.leadAnnounced = false;
+    });
+
     if ("speechSynthesis" in window) {
       el.voiceNotSupported.classList.add("hidden");
       el.voiceNavControls.classList.remove("hidden");
@@ -543,7 +610,11 @@ async function calculateRoute() {
 }
 
 // --- Navegacion por voz (turn-by-turn con GPS real) ---
-const NAV_TRIGGER_RADIUS_METERS = 35;
+// En vez de exigir pisar un radio exacto alrededor del punto de giro (lo que
+// se podia trabar para siempre si el GPS pasaba de largo), medimos cuanto
+// llevas recorrido a lo largo de la ruta y avisamos con anticipacion.
+const NAV_LEAD_METERS = 120; // avisa "en N metros, doblar..." con esta anticipacion
+const NAV_ARRIVE_METERS = 20; // a partir de aca se da por hecha la maniobra
 
 async function requestWakeLock() {
   try {
@@ -561,7 +632,6 @@ function releaseWakeLock() {
 function updateNavDisplay() {
   const next = state.navSteps[state.navIndex];
   el.voiceNextInstruction.textContent = next ? next.instruction : "Llegaste a tu destino 🎉";
-  el.voiceNextDistance.textContent = "";
 }
 
 function announceStep(index) {
@@ -570,51 +640,78 @@ function announceStep(index) {
 }
 
 function finishNavigation() {
-  speak("Llegaste a tu destino");
+  // El ultimo paso de ORS ya es la instruccion de llegada y se anuncio recien
+  // en el loop de updateNavProgress; aca solo cerramos el modo navegacion.
   stopVoiceNavigation();
 }
 
-function onNavPosition(pos) {
+// Busca el vertice de la ruta mas cercano a tu posicion actual (recorriendo
+// TODA la ruta, no solo el proximo paso) para no quedar trabado si el GPS
+// dio un salto o cortaste camino: siempre se re-ubica sobre el progreso real.
+function nearestRouteVertexIndex(lat, lon) {
+  let bestIdx = 0;
+  let bestDist = Infinity;
+  for (let i = 0; i < state.routeVertices.length; i++) {
+    const [vlat, vlon] = state.routeVertices[i];
+    const d = haversineMeters(lat, lon, vlat, vlon);
+    if (d < bestDist) {
+      bestDist = d;
+      bestIdx = i;
+    }
+  }
+  return bestIdx;
+}
+
+function updateNavProgress(lat, lon) {
+  if (!state.routeVertices?.length) return;
+
+  const traveled = state.routeCumDist[nearestRouteVertexIndex(lat, lon)];
+
+  while (state.navIndex < state.navSteps.length) {
+    const step = state.navSteps[state.navIndex];
+    const remaining = step.cumDist - traveled;
+
+    if (remaining <= NAV_ARRIVE_METERS) {
+      announceStep(state.navIndex);
+      state.navIndex++;
+      continue;
+    }
+    if (!step.leadAnnounced && remaining <= NAV_LEAD_METERS) {
+      speak(`En ${Math.round(remaining / 10) * 10} metros, ${step.instruction}`);
+      step.leadAnnounced = true;
+    }
+    break;
+  }
+
   if (state.navIndex >= state.navSteps.length) {
     finishNavigation();
     return;
   }
-  const step = state.navSteps[state.navIndex];
-  const d = haversineMeters(pos.coords.latitude, pos.coords.longitude, step.lat, step.lon);
-  el.voiceNextDistance.textContent = `en ${Math.round(d)} m`;
 
-  if (d < NAV_TRIGGER_RADIUS_METERS) {
-    announceStep(state.navIndex);
-    state.navIndex++;
-    if (state.navIndex >= state.navSteps.length) {
-      finishNavigation();
-    } else {
-      updateNavDisplay();
-    }
-  }
+  updateNavDisplay();
+  const remainingToNext = Math.max(0, Math.round(state.navSteps[state.navIndex].cumDist - traveled));
+  el.voiceNextDistance.textContent = `en ${remainingToNext} m`;
 }
 
 function startVoiceNavigation() {
-  if (!state.navSteps.length || !navigator.geolocation) return;
+  if (!state.navSteps.length) return;
 
   state.isNavigating = true;
   el.voiceNavControls.classList.add("hidden");
   el.voiceNavActive.classList.remove("hidden");
   requestWakeLock();
+  startLiveTracking(); // por si todavia no habia arrancado (ej. veniamos del fallback)
 
+  state.navSteps.forEach((s) => (s.leadAnnounced = false));
   announceStep(0);
   state.navIndex = 1;
   updateNavDisplay();
-
-  state.navWatchId = navigator.geolocation.watchPosition(onNavPosition, () => {}, {
-    enableHighAccuracy: true,
-    maximumAge: 5000,
-  });
+  el.voiceNextDistance.textContent = "";
 }
 
 function stopVoiceNavigation() {
-  if (state.navWatchId !== null) navigator.geolocation.clearWatch(state.navWatchId);
-  state.navWatchId = null;
+  // El seguimiento en vivo (marcador + estela) sigue corriendo siempre; solo
+  // apagamos el modo navegacion (anuncios de voz + camara siguiendote).
   state.isNavigating = false;
   releaseWakeLock();
   if ("speechSynthesis" in window) speechSynthesis.cancel();

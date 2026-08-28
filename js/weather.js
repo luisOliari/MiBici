@@ -153,8 +153,8 @@ function getRainProbabilityForWindow(weather, startDate, durationSeconds) {
 // Umbrales propios (heuristica), mas exigentes para monopatin por sus ruedas
 // chicas (mas sensibles a piso mojado, pozos y viento lateral).
 const VEHICLE_THRESHOLDS = {
-  bici: { windBad: 40, windWarn: 25, rainProbBad: 40, rainProbWarn: 30, tempColdWarn: 5, tempHotWarn: 36 },
-  monopatin: { windBad: 28, windWarn: 18, rainProbBad: 40, rainProbWarn: 20, tempColdWarn: 8, tempHotWarn: 34 },
+  bici: { windBad: 40, windWarn: 25, rainProbBad: 20, rainProbWarn: 10, tempColdWarn: 5, tempHotWarn: 36 },
+  monopatin: { windBad: 28, windWarn: 18, rainProbBad: 15, rainProbWarn: 8, tempColdWarn: 8, tempHotWarn: 34 },
 };
 
 function computeVerdict(vehicle, w) {
