@@ -27,6 +27,7 @@ const state = {
   navWatchId: null,
   wakeLock: null,
   isNavigating: false,
+  cardExpanded: false,
 };
 
 function haversineMeters(lat1, lon1, lat2, lon2) {
@@ -40,6 +41,8 @@ function haversineMeters(lat1, lon1, lat2, lon2) {
 
 const el = {
   statusBanner: document.getElementById("statusBanner"),
+  weatherCard: document.getElementById("weatherCard"),
+  cardHandle: document.getElementById("cardHandle"),
   btnLocate: document.getElementById("btnLocate"),
   btnSettings: document.getElementById("btnSettings"),
   vehicleBtns: document.querySelectorAll(".vehicle-btn"),
@@ -89,6 +92,21 @@ function setStatus(message, kind) {
 function getOrsKey() {
   return localStorage.getItem(ORS_KEY_STORAGE) || "";
 }
+
+// --- Tarjeta plegable: colapsada deja el mapa casi a pantalla completa ---
+function setCardExpanded(expanded) {
+  state.cardExpanded = expanded;
+  el.weatherCard.classList.toggle("collapsed", !expanded);
+  // Leaflet cachea el tamaño de su contenedor: hay que avisarle cuando cambia.
+  setTimeout(() => state.map?.invalidateSize(), 300);
+}
+el.cardHandle.addEventListener("click", (e) => {
+  e.stopPropagation();
+  setCardExpanded(!state.cardExpanded);
+});
+el.weatherCard.addEventListener("click", () => {
+  if (!state.cardExpanded) setCardExpanded(true);
+});
 
 // --- Mapa ---
 function initMap(lat, lon) {
@@ -330,7 +348,8 @@ async function calculateRoute() {
     state.routeLayer = L.geoJSON(geojson, {
       style: { color: "#16a34a", weight: 5, opacity: 0.85 },
     }).addTo(state.map);
-    state.map.fitBounds(state.routeLayer.getBounds(), { padding: [40, 40] });
+    setCardExpanded(false);
+    setTimeout(() => state.map.fitBounds(state.routeLayer.getBounds(), { padding: [40, 100] }), 320);
 
     const summary = geojson.features[0].properties.summary;
     const now = new Date();
