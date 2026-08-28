@@ -15,11 +15,14 @@ const state = {
   destLocation: null,
   vehicle: "bici",
   weather: null,
+  airQuality: null,
   map: null,
   userMarker: null,
   destMarker: null,
   routeLayer: null,
   poiMarkers: [],
+  cyclewaysLayer: null,
+  cyclewaysVisible: false,
   activeSuggestionInput: null,
   addressSearchToken: 0,
   navSteps: [],
@@ -59,6 +62,7 @@ const el = {
   weatherUv: document.getElementById("weatherUv"),
   weatherSunrise: document.getElementById("weatherSunrise"),
   weatherSunset: document.getElementById("weatherSunset"),
+  weatherAqi: document.getElementById("weatherAqi"),
   daylightNote: document.getElementById("daylightNote"),
   originInput: document.getElementById("originInput"),
   destInput: document.getElementById("destInput"),
@@ -69,7 +73,10 @@ const el = {
   routeDuration: document.getElementById("routeDuration"),
   routeEta: document.getElementById("routeEta"),
   routeRain: document.getElementById("routeRain"),
+  routeWind: document.getElementById("routeWind"),
+  routeElevation: document.getElementById("routeElevation"),
   routeNoKey: document.getElementById("routeNoKey"),
+  btnToggleLanes: document.getElementById("btnToggleLanes"),
   voiceNavControls: document.getElementById("voiceNavControls"),
   btnStartNav: document.getElementById("btnStartNav"),
   voiceNavActive: document.getElementById("voiceNavActive"),
@@ -148,6 +155,19 @@ async function loadWeather(lat, lon) {
     el.verdictLabel.textContent = "No se pudo obtener el clima";
     el.weatherVerdict.className = "weather-verdict verdict-warn";
   }
+
+  try {
+    state.airQuality = await fetchAirQuality(lat, lon);
+    renderAirQuality();
+  } catch {
+    el.weatherAqi.textContent = "s/d";
+  }
+}
+
+function renderAirQuality() {
+  const aq = airQualityLabel(state.airQuality?.europeanAqi);
+  el.weatherAqi.textContent = aq.text;
+  el.weatherAqi.className = `weather-stat-value aqi-${aq.level}`;
 }
 
 function renderWeather() {
@@ -341,6 +361,38 @@ async function loadNearbyPOIs(lat, lon) {
   }
 }
 
+// --- Ciclovias reales sobre el mapa (bajo demanda, area visible) ---
+async function toggleCycleways() {
+  if (state.cyclewaysVisible) {
+    if (state.cyclewaysLayer) state.map.removeLayer(state.cyclewaysLayer);
+    state.cyclewaysLayer = null;
+    state.cyclewaysVisible = false;
+    el.btnToggleLanes.classList.remove("active");
+    el.btnToggleLanes.textContent = "🚴 Ver ciclovías";
+    return;
+  }
+
+  el.btnToggleLanes.textContent = "Cargando…";
+  try {
+    const ways = await fetchCycleways(state.map.getBounds());
+    state.cyclewaysLayer = L.layerGroup(
+      ways.map((w) =>
+        L.polyline(
+          w.geometry.map((p) => [p.lat, p.lon]),
+          { color: "#0ea5e9", weight: 4, opacity: 0.8, dashArray: "1 8", lineCap: "round" }
+        )
+      )
+    ).addTo(state.map);
+    state.cyclewaysVisible = true;
+    el.btnToggleLanes.classList.add("active");
+    el.btnToggleLanes.textContent = ways.length ? "🚴 Ciclovías" : "🚴 Sin datos acá";
+  } catch {
+    el.btnToggleLanes.textContent = "🚴 Ver ciclovías";
+    setStatus("No se pudieron cargar las ciclovías ahora — probá de nuevo", "error");
+  }
+}
+el.btnToggleLanes.addEventListener("click", toggleCycleways);
+
 // --- Ruteo (OpenRouteService) ---
 function formatDuration(seconds) {
   const min = Math.round(seconds / 60);
@@ -416,6 +468,7 @@ async function calculateRoute() {
           [origin.lon, origin.lat],
           [state.destLocation.lon, state.destLocation.lat],
         ],
+        elevation: true,
       }),
     });
 
@@ -447,6 +500,27 @@ async function calculateRoute() {
       el.routeRain.textContent = "s/d";
     }
     updateDaylightNote(etaDate);
+
+    if (state.weather?.windDirection != null) {
+      const bearing = bearingDegrees(origin.lat, origin.lon, state.destLocation.lat, state.destLocation.lon);
+      const wind = classifyWindRelative(state.weather.windDirection, bearing);
+      el.routeWind.textContent = wind.text;
+      el.routeWind.className = `route-stat-value wind-${wind.level}`;
+    } else {
+      el.routeWind.textContent = "s/d";
+    }
+
+    const elevationCoords = geojson.features[0].geometry.coordinates;
+    if (elevationCoords[0]?.length === 3) {
+      let ascent = 0;
+      for (let i = 1; i < elevationCoords.length; i++) {
+        const diff = elevationCoords[i][2] - elevationCoords[i - 1][2];
+        if (diff > 0) ascent += diff;
+      }
+      el.routeElevation.textContent = `+${Math.round(ascent)} m`;
+    } else {
+      el.routeElevation.textContent = "s/d";
+    }
 
     el.routeResult.classList.remove("hidden");
 

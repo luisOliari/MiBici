@@ -6,6 +6,7 @@
 // ---------------------------------------------------------------------------
 
 const OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast";
+const OPEN_METEO_AIR_QUALITY_URL = "https://air-quality-api.open-meteo.com/v1/air-quality";
 
 const WEATHER_ICONS = {
   clear: "☀️",
@@ -36,7 +37,7 @@ async function fetchWeather(lat, lon) {
     latitude: lat.toFixed(4),
     longitude: lon.toFixed(4),
     current:
-      "temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,wind_gusts_10m",
+      "temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,wind_gusts_10m,wind_direction_10m",
     hourly: "precipitation_probability",
     daily: "sunrise,sunset,uv_index_max",
     forecast_days: "1",
@@ -65,6 +66,7 @@ async function fetchWeather(lat, lon) {
     precipitationNow: data.current.precipitation,
     windSpeed: data.current.wind_speed_10m,
     windGusts: data.current.wind_gusts_10m,
+    windDirection: data.current.wind_direction_10m,
     weatherCode: data.current.weather_code,
     rainProbability: rainProb,
     sunrise: fmtHour(data.daily?.sunrise?.[0]),
@@ -76,6 +78,56 @@ async function fetchWeather(lat, lon) {
     hourlyTimes,
     hourlyRainProb,
   };
+}
+
+// Calidad del aire real (Open-Meteo Air Quality API, gratis, sin key).
+// Usamos el indice europeo (EAQI 0-100+: 0-20 buena, 20-40 aceptable, etc.)
+async function fetchAirQuality(lat, lon) {
+  const params = new URLSearchParams({
+    latitude: lat.toFixed(4),
+    longitude: lon.toFixed(4),
+    current: "european_aqi,pm2_5,pm10",
+    timezone: "auto",
+  });
+  const res = await fetch(`${OPEN_METEO_AIR_QUALITY_URL}?${params.toString()}`);
+  if (!res.ok) throw new Error("Open-Meteo air quality error");
+  const data = await res.json();
+  return {
+    europeanAqi: data.current?.european_aqi ?? null,
+    pm25: data.current?.pm2_5 ?? null,
+    pm10: data.current?.pm10 ?? null,
+  };
+}
+
+function airQualityLabel(aqi) {
+  if (aqi == null) return { text: "s/d", level: "ok" };
+  if (aqi <= 20) return { text: "Buena", level: "ok" };
+  if (aqi <= 40) return { text: "Aceptable", level: "ok" };
+  if (aqi <= 60) return { text: "Moderada", level: "warn" };
+  if (aqi <= 80) return { text: "Mala", level: "bad" };
+  return { text: "Muy mala", level: "bad" };
+}
+
+// Rumbo (0-360, 0=Norte) del punto A al punto B.
+function bearingDegrees(lat1, lon1, lat2, lon2) {
+  const toRad = (d) => (d * Math.PI) / 180;
+  const toDeg = (r) => (r * 180) / Math.PI;
+  const dLon = toRad(lon2 - lon1);
+  const y = Math.sin(dLon) * Math.cos(toRad(lat2));
+  const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) - Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLon);
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+// wind_direction_10m de Open-Meteo es de DONDE viene el viento (convencion
+// meteorologica). Comparamos contra el rumbo del viaje para saber si empuja
+// (a favor), frena (en contra) o pega de costado (lateral).
+function classifyWindRelative(windDirectionFrom, travelBearing) {
+  const windTowardBearing = (windDirectionFrom + 180) % 360;
+  let diff = Math.abs(windTowardBearing - travelBearing) % 360;
+  if (diff > 180) diff = 360 - diff;
+  if (diff <= 45) return { text: "a favor 💨", level: "ok" };
+  if (diff >= 135) return { text: "en contra 🌬️", level: "warn" };
+  return { text: "de costado", level: "ok" };
 }
 
 // Probabilidad de lluvia MAXIMA (peor caso) durante una ventana de tiempo,

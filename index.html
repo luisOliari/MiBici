@@ -39,6 +39,7 @@
 
     <main class="map-wrap">
       <div id="map"></div>
+      <button id="btnToggleLanes" class="lanes-toggle">🚴 Ver ciclovías</button>
       <div id="statusBanner" class="status-banner">Obteniendo tu ubicación…</div>
     </main>
 
@@ -76,6 +77,10 @@
         <div class="weather-stat">
           <span class="weather-stat-label">Índice UV</span>
           <span id="weatherUv" class="weather-stat-value">—</span>
+        </div>
+        <div class="weather-stat">
+          <span class="weather-stat-label">Calidad aire</span>
+          <span id="weatherAqi" class="weather-stat-value">—</span>
         </div>
         <div class="weather-stat">
           <span class="weather-stat-label">Amanecer</span>
@@ -120,6 +125,14 @@
           <div class="route-stat">
             <span class="route-stat-label">Lluvia en el trayecto</span>
             <span id="routeRain" class="route-stat-value">—</span>
+          </div>
+          <div class="route-stat">
+            <span class="route-stat-label">Viento</span>
+            <span id="routeWind" class="route-stat-value">—</span>
+          </div>
+          <div class="route-stat">
+            <span class="route-stat-label">Desnivel</span>
+            <span id="routeElevation" class="route-stat-value">—</span>
           </div>
         </div>
         <p class="route-note">Ruta tranquila para bici/monopatín: prioriza ciclovías y evita avenidas. No refleja tránsito vehicular en vivo (no existe una fuente pública de tránsito en tiempo real para Montevideo).</p>
@@ -166,6 +179,7 @@
   <script src="vendor/leaflet.js"></script>
   <script src="js/weather.js"></script>
   <script src="js/poi.js"></script>
+  <script src="js/bikelanes.js"></script>
   <script src="js/intersection.js"></script>
   <script src="js/voice.js"></script>
   <script src="js/app.js"></script>
