@@ -1,0 +1,377 @@
+// Centro de Montevideo (Plaza Independencia) como fallback si no hay permiso de ubicacion.
+const FALLBACK_LOCATION = { lat: -34.9058, lon: -56.1913 };
+const MONTEVIDEO_VIEWBOX = "-56.42,-34.70,-55.95,-34.95"; // left,top,right,bottom
+const NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
+const ORS_KEY_STORAGE = "mibici_ors_key";
+
+// Perfil de ruteo de OpenRouteService: no existe un perfil especifico de
+// "monopatin", asi que usamos el mismo perfil ciclista (prioriza ciclovias
+// y calles tranquilas) para bici y monopatin.
+const ORS_PROFILE = "cycling-regular";
+
+const state = {
+  userLocation: null,
+  originLocation: null, // si el usuario elige un origen distinto al GPS
+  destLocation: null,
+  vehicle: "bici",
+  weather: null,
+  map: null,
+  userMarker: null,
+  destMarker: null,
+  routeLayer: null,
+  poiMarkers: [],
+  activeSuggestionInput: null,
+  addressSearchToken: 0,
+};
+
+const el = {
+  statusBanner: document.getElementById("statusBanner"),
+  btnLocate: document.getElementById("btnLocate"),
+  btnSettings: document.getElementById("btnSettings"),
+  vehicleBtns: document.querySelectorAll(".vehicle-btn"),
+  weatherIcon: document.getElementById("weatherIcon"),
+  weatherTemp: document.getElementById("weatherTemp"),
+  weatherVerdict: document.getElementById("weatherVerdict"),
+  verdictLabel: document.getElementById("verdictLabel"),
+  verdictVehicle: document.getElementById("verdictVehicle"),
+  weatherWind: document.getElementById("weatherWind"),
+  weatherRain: document.getElementById("weatherRain"),
+  originInput: document.getElementById("originInput"),
+  destInput: document.getElementById("destInput"),
+  destSuggestions: document.getElementById("destSuggestions"),
+  btnCalcRoute: document.getElementById("btnCalcRoute"),
+  routeResult: document.getElementById("routeResult"),
+  routeDistance: document.getElementById("routeDistance"),
+  routeDuration: document.getElementById("routeDuration"),
+  routeEta: document.getElementById("routeEta"),
+  routeRain: document.getElementById("routeRain"),
+  routeNoKey: document.getElementById("routeNoKey"),
+  poiSummary: document.getElementById("poiSummary"),
+  poiChips: document.getElementById("poiChips"),
+  settingsSheet: document.getElementById("settingsSheet"),
+  btnCloseSettings: document.getElementById("btnCloseSettings"),
+  orsKeyInput: document.getElementById("orsKeyInput"),
+  btnSaveKey: document.getElementById("btnSaveKey"),
+  keyStatus: document.getElementById("keyStatus"),
+};
+
+function setStatus(message, kind) {
+  if (!message) {
+    el.statusBanner.classList.add("hidden");
+    return;
+  }
+  el.statusBanner.classList.remove("hidden");
+  el.statusBanner.textContent = message;
+  el.statusBanner.classList.toggle("error", kind === "error");
+}
+
+function getOrsKey() {
+  return localStorage.getItem(ORS_KEY_STORAGE) || "";
+}
+
+// --- Mapa ---
+function initMap(lat, lon) {
+  state.map = L.map("map", { zoomControl: false }).setView([lat, lon], 15);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: "&copy; OpenStreetMap contributors",
+    maxZoom: 19,
+  }).addTo(state.map);
+  L.control.zoom({ position: "bottomright" }).addTo(state.map);
+}
+
+function placeUserMarker(lat, lon) {
+  const icon = L.divIcon({ className: "", html: '<div class="user-dot"></div>', iconSize: [18, 18] });
+  if (state.userMarker) state.userMarker.setLatLng([lat, lon]);
+  else state.userMarker = L.marker([lat, lon], { icon, zIndexOffset: 1000 }).addTo(state.map);
+}
+
+function placeDestMarker(lat, lon) {
+  const icon = L.divIcon({ className: "", html: '<div class="dest-pin"></div>', iconSize: [26, 26], iconAnchor: [13, 26] });
+  if (state.destMarker) state.destMarker.setLatLng([lat, lon]);
+  else state.destMarker = L.marker([lat, lon], { icon, zIndexOffset: 900 }).addTo(state.map);
+}
+
+// --- Clima ---
+async function loadWeather(lat, lon) {
+  el.weatherIcon.textContent = "⏳";
+  el.verdictLabel.textContent = "Consultando clima…";
+  el.weatherVerdict.className = "weather-verdict verdict-loading";
+  try {
+    const w = await fetchWeather(lat, lon);
+    state.weather = w;
+    renderWeather();
+  } catch {
+    el.verdictLabel.textContent = "No se pudo obtener el clima";
+    el.weatherVerdict.className = "weather-verdict verdict-warn";
+  }
+}
+
+function renderWeather() {
+  if (!state.weather) return;
+  const w = state.weather;
+  el.weatherIcon.textContent = weatherCodeToIcon(w.weatherCode);
+  el.weatherTemp.textContent = `${Math.round(w.temperature)}°`;
+  el.weatherWind.textContent = `Viento: ${Math.round(w.windSpeed)} km/h`;
+  el.weatherRain.textContent = w.rainProbability !== null ? `Lluvia: ${w.rainProbability}%` : "Lluvia: s/d";
+
+  const verdict = computeVerdict(state.vehicle, w);
+  el.verdictLabel.textContent = verdict.label;
+  el.weatherVerdict.className = `weather-verdict verdict-${verdict.level}`;
+  el.verdictVehicle.textContent = state.vehicle === "monopatin" ? "monopatín" : "bici";
+}
+
+// --- Geolocalizacion ---
+function onLocationReady(lat, lon, { fallback } = {}) {
+  state.userLocation = { lat, lon };
+
+  if (!state.map) initMap(lat, lon);
+  else state.map.panTo([lat, lon]);
+
+  placeUserMarker(lat, lon);
+  loadWeather(lat, lon);
+
+  setStatus(
+    fallback ? "No se pudo acceder a tu ubicación — mostrando zona de ejemplo (Centro)" : null,
+    fallback ? "error" : undefined
+  );
+}
+
+function requestGeolocation() {
+  setStatus("Obteniendo tu ubicación…");
+  if (!navigator.geolocation) {
+    onLocationReady(FALLBACK_LOCATION.lat, FALLBACK_LOCATION.lon, { fallback: true });
+    return;
+  }
+
+  navigator.geolocation.getCurrentPosition(
+    (pos) => onLocationReady(pos.coords.latitude, pos.coords.longitude),
+    (err) => {
+      const messages = {
+        1: "Permiso de ubicación bloqueado. Revisá los permisos del sitio en tu navegador y tocá 📍 de nuevo.",
+        2: "No se pudo determinar tu posición (revisá que el Servicio de Ubicación esté activado en tu SO).",
+        3: "Tardó demasiado en responder. Tocá 📍 para reintentar.",
+      };
+      console.warn("Geolocation error:", err.code, err.message);
+      setStatus(messages[err.code] || "No se pudo acceder a tu ubicación", "error");
+      onLocationReady(FALLBACK_LOCATION.lat, FALLBACK_LOCATION.lon, { fallback: true });
+    },
+    { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 }
+  );
+}
+
+// --- Buscador de direcciones (Nominatim) para origen/destino ---
+function renderSuggestions(results, targetInput) {
+  if (!results.length) {
+    el.destSuggestions.classList.add("hidden");
+    return;
+  }
+  el.destSuggestions.classList.remove("hidden");
+  el.destSuggestions.innerHTML = results
+    .map((r, i) => `<div class="suggestion-item" data-idx="${i}">📍 ${r.display_name}</div>`)
+    .join("");
+
+  el.destSuggestions.querySelectorAll(".suggestion-item").forEach((node) => {
+    node.addEventListener("click", () => {
+      const r = results[Number(node.dataset.idx)];
+      const label = r.display_name.split(",").slice(0, 2).join(",");
+      const loc = { lat: parseFloat(r.lat), lon: parseFloat(r.lon) };
+
+      if (targetInput === el.originInput) {
+        state.originLocation = loc;
+        el.originInput.value = label;
+      } else {
+        state.destLocation = loc;
+        el.destInput.value = label;
+        placeDestMarker(loc.lat, loc.lon);
+        state.map.panTo([loc.lat, loc.lon]);
+        loadNearbyPOIs(loc.lat, loc.lon);
+      }
+      el.destSuggestions.classList.add("hidden");
+    });
+  });
+}
+
+async function searchAddress(query, targetInput) {
+  const token = ++state.addressSearchToken;
+  try {
+    const url = `${NOMINATIM_URL}?format=json&limit=5&countrycodes=uy&viewbox=${MONTEVIDEO_VIEWBOX}&bounded=1&q=${encodeURIComponent(query)}`;
+    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    if (!res.ok) throw new Error("nominatim error");
+    const data = await res.json();
+    if (token !== state.addressSearchToken) return;
+    renderSuggestions(data, targetInput);
+  } catch {
+    if (token === state.addressSearchToken) el.destSuggestions.classList.add("hidden");
+  }
+}
+
+let addressDebounce = null;
+function wireAddressInput(inputEl) {
+  inputEl.addEventListener("focus", () => (state.activeSuggestionInput = inputEl));
+  inputEl.addEventListener("input", (e) => {
+    state.activeSuggestionInput = inputEl;
+    const q = e.target.value.trim();
+    clearTimeout(addressDebounce);
+    if (q.length < 3) {
+      el.destSuggestions.classList.add("hidden");
+      return;
+    }
+    addressDebounce = setTimeout(() => searchAddress(`${q}, Montevideo, Uruguay`, inputEl), 400);
+  });
+}
+wireAddressInput(el.originInput);
+wireAddressInput(el.destInput);
+
+// --- Puntos de interes cerca del destino (Overpass / OpenStreetMap) ---
+function clearPoiMarkers() {
+  state.poiMarkers.forEach((m) => state.map.removeLayer(m));
+  state.poiMarkers = [];
+}
+
+async function loadNearbyPOIs(lat, lon) {
+  clearPoiMarkers();
+  el.poiSummary.classList.add("hidden");
+  el.poiChips.innerHTML = "";
+
+  try {
+    const pois = await fetchNearbyPOIs(lat, lon);
+    if (!pois.length) return;
+
+    const counts = {};
+    pois.forEach((p) => {
+      counts[p.category] = (counts[p.category] || 0) + 1;
+      const icon = L.divIcon({
+        className: "",
+        html: `<div class="poi-marker">${POI_CATEGORIES[p.category].icon}</div>`,
+        iconSize: [26, 26],
+        iconAnchor: [13, 13],
+      });
+      const marker = L.marker([p.lat, p.lon], { icon }).bindPopup(p.name);
+      marker.addTo(state.map);
+      state.poiMarkers.push(marker);
+    });
+
+    el.poiChips.innerHTML = Object.entries(counts)
+      .map(([cat, n]) => `<span class="poi-chip">${POI_CATEGORIES[cat].icon} ${n} ${POI_CATEGORIES[cat].label}</span>`)
+      .join("");
+    el.poiSummary.classList.remove("hidden");
+  } catch (e) {
+    console.warn("No se pudieron cargar los puntos de interés:", e.message);
+  }
+}
+
+// --- Ruteo (OpenRouteService) ---
+function formatDuration(seconds) {
+  const min = Math.round(seconds / 60);
+  if (min < 60) return `${min} min`;
+  return `${Math.floor(min / 60)}h ${min % 60}min`;
+}
+
+async function calculateRoute() {
+  const key = getOrsKey();
+  if (!key) {
+    el.routeNoKey.classList.remove("hidden");
+    el.routeResult.classList.add("hidden");
+    return;
+  }
+  const origin = state.originLocation || state.userLocation;
+  if (!origin || !state.destLocation) {
+    setStatus("Elegí un destino de la lista de sugerencias antes de calcular la ruta", "error");
+    return;
+  }
+
+  el.btnCalcRoute.disabled = true;
+  el.btnCalcRoute.textContent = "Calculando…";
+  el.routeNoKey.classList.add("hidden");
+
+  try {
+    const res = await fetch(`https://api.openrouteservice.org/v2/directions/${ORS_PROFILE}/geojson`, {
+      method: "POST",
+      headers: {
+        Authorization: key,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        coordinates: [
+          [origin.lon, origin.lat],
+          [state.destLocation.lon, state.destLocation.lat],
+        ],
+      }),
+    });
+
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody?.error?.message || `Error ${res.status}`);
+    }
+    const geojson = await res.json();
+
+    if (state.routeLayer) state.map.removeLayer(state.routeLayer);
+    state.routeLayer = L.geoJSON(geojson, {
+      style: { color: "#16a34a", weight: 5, opacity: 0.85 },
+    }).addTo(state.map);
+    state.map.fitBounds(state.routeLayer.getBounds(), { padding: [40, 40] });
+
+    const summary = geojson.features[0].properties.summary;
+    const now = new Date();
+    const etaDate = new Date(now.getTime() + summary.duration * 1000);
+
+    el.routeDistance.textContent = `${(summary.distance / 1000).toFixed(1)} km`;
+    el.routeDuration.textContent = formatDuration(summary.duration);
+    el.routeEta.textContent = etaDate.toLocaleTimeString("es-UY", { hour: "2-digit", minute: "2-digit" });
+
+    if (state.weather) {
+      const rainOnTrip = getRainProbabilityForWindow(state.weather, now, summary.duration);
+      el.routeRain.textContent = rainOnTrip !== null ? `${rainOnTrip}%` : "s/d";
+    } else {
+      el.routeRain.textContent = "s/d";
+    }
+
+    el.routeResult.classList.remove("hidden");
+  } catch (e) {
+    setStatus(`No se pudo calcular la ruta: ${e.message}`, "error");
+  } finally {
+    el.btnCalcRoute.disabled = false;
+    el.btnCalcRoute.textContent = "Calcular ruta";
+  }
+}
+
+// --- Selector de vehiculo ---
+el.vehicleBtns.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    el.vehicleBtns.forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    state.vehicle = btn.dataset.vehicle;
+    renderWeather();
+  });
+});
+
+// --- Settings (API key de OpenRouteService) ---
+function openSettings() {
+  el.orsKeyInput.value = getOrsKey();
+  el.keyStatus.textContent = "";
+  el.settingsSheet.classList.remove("hidden");
+}
+el.btnSettings.addEventListener("click", openSettings);
+el.btnCloseSettings.addEventListener("click", () => el.settingsSheet.classList.add("hidden"));
+el.btnSaveKey.addEventListener("click", () => {
+  const key = el.orsKeyInput.value.trim();
+  if (key) {
+    localStorage.setItem(ORS_KEY_STORAGE, key);
+    el.keyStatus.textContent = "Guardada ✓ — ya podés calcular rutas";
+    el.routeNoKey.classList.add("hidden");
+  } else {
+    localStorage.removeItem(ORS_KEY_STORAGE);
+    el.keyStatus.textContent = "Se borró la key guardada";
+  }
+});
+
+el.btnLocate.addEventListener("click", requestGeolocation);
+el.btnCalcRoute.addEventListener("click", calculateRoute);
+
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".route-field")) el.destSuggestions.classList.add("hidden");
+});
+
+if (!getOrsKey()) el.routeNoKey.classList.remove("hidden");
+
+requestGeolocation();
