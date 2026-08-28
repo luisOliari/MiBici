@@ -53,6 +53,13 @@ const el = {
   verdictVehicle: document.getElementById("verdictVehicle"),
   weatherWind: document.getElementById("weatherWind"),
   weatherRain: document.getElementById("weatherRain"),
+  weatherFeelsLike: document.getElementById("weatherFeelsLike"),
+  weatherHumidity: document.getElementById("weatherHumidity"),
+  weatherGusts: document.getElementById("weatherGusts"),
+  weatherUv: document.getElementById("weatherUv"),
+  weatherSunrise: document.getElementById("weatherSunrise"),
+  weatherSunset: document.getElementById("weatherSunset"),
+  daylightNote: document.getElementById("daylightNote"),
   originInput: document.getElementById("originInput"),
   destInput: document.getElementById("destInput"),
   destSuggestions: document.getElementById("destSuggestions"),
@@ -155,6 +162,27 @@ function renderWeather() {
   el.verdictLabel.textContent = verdict.label;
   el.weatherVerdict.className = `weather-verdict verdict-${verdict.level}`;
   el.verdictVehicle.textContent = state.vehicle === "monopatin" ? "monopatín" : "bici";
+
+  el.weatherFeelsLike.textContent = w.apparentTemperature != null ? `${Math.round(w.apparentTemperature)}°` : "—";
+  el.weatherHumidity.textContent = w.humidity != null ? `${w.humidity}%` : "—";
+  el.weatherGusts.textContent = w.windGusts != null ? `${Math.round(w.windGusts)} km/h` : "—";
+  el.weatherUv.textContent = w.uvIndexMax != null ? w.uvIndexMax.toFixed(1) : "—";
+  el.weatherSunrise.textContent = w.sunrise || "—";
+  el.weatherSunset.textContent = w.sunset || "—";
+
+  updateDaylightNote();
+}
+
+// Avisa si ahora mismo (o la llegada estimada de una ruta calculada) cae
+// cerca o despues de la puesta de sol — relevante para andar seguro en bici.
+function updateDaylightNote(tripEtaDate) {
+  if (!state.weather?.sunsetDate) {
+    el.daylightNote.classList.add("hidden");
+    return;
+  }
+  const checkDate = tripEtaDate || new Date();
+  const isDark = checkDate.getTime() >= state.weather.sunsetDate.getTime() - 20 * 60 * 1000;
+  el.daylightNote.classList.toggle("hidden", !isDark);
 }
 
 // --- Geolocalizacion ---
@@ -267,6 +295,11 @@ function wireAddressInput(inputEl) {
   inputEl.addEventListener("focus", () => (state.activeSuggestionInput = inputEl));
   inputEl.addEventListener("input", (e) => {
     state.activeSuggestionInput = inputEl;
+    // El texto ya no corresponde a la ubicacion elegida antes: la invalidamos
+    // para que "Calcular ruta" vuelva a resolverla en vez de usar la vieja.
+    if (inputEl === el.originInput) state.originLocation = null;
+    else state.destLocation = null;
+
     const q = e.target.value.trim();
     clearTimeout(addressDebounce);
     if (q.length < 3) {
@@ -297,7 +330,9 @@ async function loadNearbyPOIs(lat, lon) {
         iconSize: [26, 26],
         iconAnchor: [13, 13],
       });
-      const marker = L.marker([p.lat, p.lon], { icon }).bindPopup(p.name);
+      const marker = L.marker([p.lat, p.lon], { icon })
+        .bindTooltip(p.name, { direction: "top", offset: [0, -12] })
+        .bindPopup(p.name);
       marker.addTo(state.map);
       state.poiMarkers.push(marker);
     });
@@ -313,6 +348,28 @@ function formatDuration(seconds) {
   return `${Math.floor(min / 60)}h ${min % 60}min`;
 }
 
+// Si el usuario escribio una direccion/esquina pero no toco ninguna sugerencia
+// de la lista, igual intentamos resolverla al tocar "Calcular ruta" (evita el
+// error confuso de "elegi un destino" cuando el texto ya alcanza para ubicarlo).
+async function resolveAddressText(text) {
+  const parts = parseIntersectionQuery(text);
+  if (parts) {
+    const point = await findStreetIntersection(parts[0], parts[1]).catch(() => null);
+    if (point) return point;
+  }
+  try {
+    const url = `${NOMINATIM_URL}?format=json&limit=1&countrycodes=uy&viewbox=${MONTEVIDEO_VIEWBOX}&bounded=1&q=${encodeURIComponent(`${text}, Montevideo, Uruguay`)}`;
+    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    if (res.ok) {
+      const data = await res.json();
+      if (data[0]) return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
+    }
+  } catch {
+    /* sin resultado */
+  }
+  return null;
+}
+
 async function calculateRoute() {
   const key = getOrsKey();
   if (!key) {
@@ -321,9 +378,26 @@ async function calculateRoute() {
     return;
   }
   const origin = state.originLocation || state.userLocation;
-  if (!origin || !state.destLocation) {
-    setStatus("Elegí un destino de la lista de sugerencias antes de calcular la ruta", "error");
+  if (!origin) {
+    setStatus("No pude determinar tu ubicación de origen", "error");
     return;
+  }
+
+  if (!state.destLocation) {
+    const typed = el.destInput.value.trim();
+    if (!typed) {
+      setStatus("Escribí a dónde vas antes de calcular la ruta", "error");
+      return;
+    }
+    setStatus("Buscando esa dirección…");
+    const resolved = await resolveAddressText(typed);
+    if (!resolved) {
+      setStatus("No encontré esa dirección — probá elegir una de las sugerencias de la lista", "error");
+      return;
+    }
+    state.destLocation = resolved;
+    placeDestMarker(resolved.lat, resolved.lon);
+    loadNearbyPOIs(resolved.lat, resolved.lon);
   }
 
   el.btnCalcRoute.disabled = true;
@@ -372,6 +446,7 @@ async function calculateRoute() {
     } else {
       el.routeRain.textContent = "s/d";
     }
+    updateDaylightNote(etaDate);
 
     el.routeResult.classList.remove("hidden");
 

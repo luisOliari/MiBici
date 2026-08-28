@@ -6,7 +6,10 @@
 // ---------------------------------------------------------------------------
 
 const OVERPASS_URL = "https://overpass-api.de/api/interpreter";
-const POI_RADIUS_METERS = 400;
+// El servidor publico de Overpass a veces devuelve 504 por sobrecarga; si
+// falla, reintentamos una vez contra un espejo publico antes de rendirnos.
+const OVERPASS_MIRROR_URL = "https://overpass.kumi.systems/api/interpreter";
+const POI_RADIUS_METERS = 600;
 
 const POI_CATEGORIES = {
   cafe: { icon: "☕", label: "cafés" },
@@ -14,12 +17,15 @@ const POI_CATEGORIES = {
   attraction: { icon: "📍", label: "puntos de interés" },
 };
 
+// Cada categoria tiene su propio "out" con limite propio: si no, una zona con
+// muchos cafes podia llenar el limite total y dejar afuera los bicicleteros
+// (que suelen estar mapeados con menos frecuencia en OSM).
 function overpassQuery(lat, lon) {
-  return `[out:json][timeout:15];(
-    node["amenity"="cafe"](around:${POI_RADIUS_METERS},${lat},${lon});
-    node["amenity"="bicycle_parking"](around:${POI_RADIUS_METERS},${lat},${lon});
-    node["tourism"="attraction"](around:${POI_RADIUS_METERS},${lat},${lon});
-  );out center 20;`;
+  const r = POI_RADIUS_METERS;
+  return `[out:json][timeout:20];
+    (node["amenity"="cafe"](around:${r},${lat},${lon}););out center 10;
+    (node["amenity"="bicycle_parking"](around:${r},${lat},${lon}););out center 20;
+    (node["tourism"="attraction"](around:${r},${lat},${lon}););out center 8;`;
 }
 
 function classifyElement(tags) {
@@ -29,11 +35,20 @@ function classifyElement(tags) {
   return null;
 }
 
+async function queryOverpass(query) {
+  for (const base of [OVERPASS_URL, OVERPASS_MIRROR_URL]) {
+    try {
+      const res = await fetch(`${base}?data=${encodeURIComponent(query)}`);
+      if (res.ok) return await res.json();
+    } catch {
+      /* probamos el siguiente servidor */
+    }
+  }
+  throw new Error("Overpass no disponible (servidor principal y espejo fallaron)");
+}
+
 async function fetchNearbyPOIs(lat, lon) {
-  const url = `${OVERPASS_URL}?data=${encodeURIComponent(overpassQuery(lat, lon))}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error("Overpass error");
-  const data = await res.json();
+  const data = await queryOverpass(overpassQuery(lat, lon));
 
   return data.elements
     .map((el) => {

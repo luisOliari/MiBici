@@ -35,8 +35,10 @@ async function fetchWeather(lat, lon) {
   const params = new URLSearchParams({
     latitude: lat.toFixed(4),
     longitude: lon.toFixed(4),
-    current: "temperature_2m,precipitation,weather_code,wind_speed_10m,wind_gusts_10m",
+    current:
+      "temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,wind_gusts_10m",
     hourly: "precipitation_probability",
+    daily: "sunrise,sunset,uv_index_max",
     forecast_days: "1",
     timezone: "auto",
   });
@@ -54,13 +56,23 @@ async function fetchWeather(lat, lon) {
     rainProb = idx >= 0 ? hourlyRainProb[idx] : hourlyRainProb[0];
   }
 
+  const fmtHour = (iso) => (iso ? new Date(iso).toLocaleTimeString("es-UY", { hour: "2-digit", minute: "2-digit" }) : null);
+
   return {
     temperature: data.current.temperature_2m,
+    apparentTemperature: data.current.apparent_temperature,
+    humidity: data.current.relative_humidity_2m,
     precipitationNow: data.current.precipitation,
     windSpeed: data.current.wind_speed_10m,
     windGusts: data.current.wind_gusts_10m,
     weatherCode: data.current.weather_code,
     rainProbability: rainProb,
+    sunrise: fmtHour(data.daily?.sunrise?.[0]),
+    sunset: fmtHour(data.daily?.sunset?.[0]),
+    // Fecha real (no el texto formateado) para poder comparar horarios sin
+    // depender del formato 12h/24h que use el navegador para mostrarlo.
+    sunsetDate: data.daily?.sunset?.[0] ? new Date(data.daily.sunset[0]) : null,
+    uvIndexMax: data.daily?.uv_index_max?.[0] ?? null,
     hourlyTimes,
     hourlyRainProb,
   };
@@ -89,7 +101,7 @@ function getRainProbabilityForWindow(weather, startDate, durationSeconds) {
 // Umbrales propios (heuristica), mas exigentes para monopatin por sus ruedas
 // chicas (mas sensibles a piso mojado, pozos y viento lateral).
 const VEHICLE_THRESHOLDS = {
-  bici: { windBad: 40, windWarn: 25, rainProbBad: 60, rainProbWarn: 30, tempColdWarn: 5, tempHotWarn: 36 },
+  bici: { windBad: 40, windWarn: 25, rainProbBad: 40, rainProbWarn: 30, tempColdWarn: 5, tempHotWarn: 36 },
   monopatin: { windBad: 28, windWarn: 18, rainProbBad: 40, rainProbWarn: 20, tempColdWarn: 8, tempHotWarn: 34 },
 };
 

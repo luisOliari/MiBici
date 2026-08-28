@@ -196,6 +196,35 @@ html, body {
   font-size: 13px;
   color: var(--color-text-muted);
 }
+.weather-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+}
+.weather-stat { display: flex; flex-direction: column; gap: 2px; }
+.weather-stat-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+.weather-stat-value { font-size: 14px; font-weight: 700; color: var(--color-text); }
+
+.daylight-note {
+  margin: 10px 0 0;
+  font-size: 12px;
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+  color: #3730a3;
+  padding: 8px 10px;
+  border-radius: 10px;
+}
+.daylight-note.hidden { display: none; }
+
 .data-source {
   margin: 6px 0 0;
   font-size: 11px;

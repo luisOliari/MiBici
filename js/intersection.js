@@ -43,9 +43,7 @@ function segmentIntersection(p1, p2, p3, p4) {
 
 async function fetchWaysNear(lat, lon, radiusMeters) {
   const query = `[out:json][timeout:20];way["highway"](around:${radiusMeters},${lat},${lon});out geom;`;
-  const res = await fetch(OVERPASS_URL, { method: "POST", body: `data=${encodeURIComponent(query)}` });
-  if (!res.ok) throw new Error("Overpass error");
-  const data = await res.json();
+  const data = await queryOverpass(query); // reutiliza el fallback a espejo definido en poi.js
   return data.elements.filter((el) => el.tags?.name && el.geometry?.length > 1);
 }
 
