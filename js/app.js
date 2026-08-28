@@ -22,7 +22,21 @@ const state = {
   poiMarkers: [],
   activeSuggestionInput: null,
   addressSearchToken: 0,
+  navSteps: [],
+  navIndex: 0,
+  navWatchId: null,
+  wakeLock: null,
+  isNavigating: false,
 };
+
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
 
 const el = {
   statusBanner: document.getElementById("statusBanner"),
@@ -48,6 +62,13 @@ const el = {
   routeNoKey: document.getElementById("routeNoKey"),
   poiSummary: document.getElementById("poiSummary"),
   poiChips: document.getElementById("poiChips"),
+  voiceNavControls: document.getElementById("voiceNavControls"),
+  btnStartNav: document.getElementById("btnStartNav"),
+  voiceNavActive: document.getElementById("voiceNavActive"),
+  voiceNextInstruction: document.getElementById("voiceNextInstruction"),
+  voiceNextDistance: document.getElementById("voiceNextDistance"),
+  btnStopNav: document.getElementById("btnStopNav"),
+  voiceNotSupported: document.getElementById("voiceNotSupported"),
   settingsSheet: document.getElementById("settingsSheet"),
   btnCloseSettings: document.getElementById("btnCloseSettings"),
   orsKeyInput: document.getElementById("orsKeyInput"),
@@ -327,6 +348,17 @@ async function calculateRoute() {
     }
 
     el.routeResult.classList.remove("hidden");
+
+    stopVoiceNavigation();
+    state.navSteps = extractRouteSteps(geojson);
+    state.navIndex = 0;
+    if ("speechSynthesis" in window) {
+      el.voiceNotSupported.classList.add("hidden");
+      el.voiceNavControls.classList.remove("hidden");
+    } else {
+      el.voiceNavControls.classList.add("hidden");
+      el.voiceNotSupported.classList.remove("hidden");
+    }
   } catch (e) {
     setStatus(`No se pudo calcular la ruta: ${e.message}`, "error");
   } finally {
@@ -334,6 +366,89 @@ async function calculateRoute() {
     el.btnCalcRoute.textContent = "Calcular ruta";
   }
 }
+
+// --- Navegacion por voz (turn-by-turn con GPS real) ---
+const NAV_TRIGGER_RADIUS_METERS = 35;
+
+async function requestWakeLock() {
+  try {
+    if ("wakeLock" in navigator) state.wakeLock = await navigator.wakeLock.request("screen");
+  } catch {
+    state.wakeLock = null; // no critico: si falla, la navegacion sigue funcionando igual
+  }
+}
+
+function releaseWakeLock() {
+  state.wakeLock?.release?.().catch(() => {});
+  state.wakeLock = null;
+}
+
+function updateNavDisplay() {
+  const next = state.navSteps[state.navIndex];
+  el.voiceNextInstruction.textContent = next ? next.instruction : "Llegaste a tu destino 🎉";
+  el.voiceNextDistance.textContent = "";
+}
+
+function announceStep(index) {
+  const step = state.navSteps[index];
+  if (step) speak(step.instruction);
+}
+
+function finishNavigation() {
+  speak("Llegaste a tu destino");
+  stopVoiceNavigation();
+}
+
+function onNavPosition(pos) {
+  if (state.navIndex >= state.navSteps.length) {
+    finishNavigation();
+    return;
+  }
+  const step = state.navSteps[state.navIndex];
+  const d = haversineMeters(pos.coords.latitude, pos.coords.longitude, step.lat, step.lon);
+  el.voiceNextDistance.textContent = `en ${Math.round(d)} m`;
+
+  if (d < NAV_TRIGGER_RADIUS_METERS) {
+    announceStep(state.navIndex);
+    state.navIndex++;
+    if (state.navIndex >= state.navSteps.length) {
+      finishNavigation();
+    } else {
+      updateNavDisplay();
+    }
+  }
+}
+
+function startVoiceNavigation() {
+  if (!state.navSteps.length || !navigator.geolocation) return;
+
+  state.isNavigating = true;
+  el.voiceNavControls.classList.add("hidden");
+  el.voiceNavActive.classList.remove("hidden");
+  requestWakeLock();
+
+  announceStep(0);
+  state.navIndex = 1;
+  updateNavDisplay();
+
+  state.navWatchId = navigator.geolocation.watchPosition(onNavPosition, () => {}, {
+    enableHighAccuracy: true,
+    maximumAge: 5000,
+  });
+}
+
+function stopVoiceNavigation() {
+  if (state.navWatchId !== null) navigator.geolocation.clearWatch(state.navWatchId);
+  state.navWatchId = null;
+  state.isNavigating = false;
+  releaseWakeLock();
+  if ("speechSynthesis" in window) speechSynthesis.cancel();
+  el.voiceNavActive.classList.add("hidden");
+  if (state.navSteps.length) el.voiceNavControls.classList.remove("hidden");
+}
+
+el.btnStartNav.addEventListener("click", startVoiceNavigation);
+el.btnStopNav.addEventListener("click", stopVoiceNavigation);
 
 // --- Selector de vehiculo ---
 el.vehicleBtns.forEach((btn) => {

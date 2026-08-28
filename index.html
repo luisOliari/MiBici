@@ -83,6 +83,19 @@
           </div>
         </div>
         <p class="route-note">Ruta tranquila para bici/monopatín: prioriza ciclovías y evita avenidas. No refleja tránsito vehicular en vivo (no existe una fuente pública de tránsito en tiempo real para Montevideo).</p>
+
+        <div id="voiceNavControls" class="voice-nav hidden">
+          <button id="btnStartNav" class="btn-primary">🔊 Iniciar navegación por voz</button>
+        </div>
+        <div id="voiceNavActive" class="voice-nav-active hidden">
+          <p class="voice-next-label">🔊 Próxima indicación</p>
+          <p id="voiceNextInstruction" class="voice-next-instruction">—</p>
+          <p id="voiceNextDistance" class="voice-next-distance"></p>
+          <button id="btnStopNav" class="btn-secondary">⏹ Detener navegación</button>
+        </div>
+        <p id="voiceNotSupported" class="voice-not-supported hidden">
+          Tu navegador no soporta indicaciones por voz. Vas a poder ver la ruta en el mapa igual.
+        </p>
       </div>
 
       <div id="routeNoKey" class="route-nokey hidden">
@@ -119,6 +132,7 @@
   <script src="vendor/leaflet.js"></script>
   <script src="js/weather.js"></script>
   <script src="js/poi.js"></script>
+  <script src="js/voice.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>
