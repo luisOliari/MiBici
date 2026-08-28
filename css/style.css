@@ -357,24 +357,7 @@ html, body {
 }
 .voice-not-supported.hidden { display: none; }
 
-/* Puntos de interes cerca del destino */
-.poi-summary { margin-top: 14px; }
-.poi-summary.hidden { display: none; }
-.poi-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 8px 0;
-}
-.poi-chip {
-  background: #f0f9ff;
-  border: 1px solid #bae6fd;
-  color: #075985;
-  font-size: 12.5px;
-  font-weight: 600;
-  padding: 6px 12px;
-  border-radius: 999px;
-}
+/* Puntos de interes cerca del destino: solo iconos en el mapa */
 .poi-marker {
   width: 26px; height: 26px;
   border-radius: 50%;

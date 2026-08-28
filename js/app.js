@@ -63,8 +63,6 @@ const el = {
   routeEta: document.getElementById("routeEta"),
   routeRain: document.getElementById("routeRain"),
   routeNoKey: document.getElementById("routeNoKey"),
-  poiSummary: document.getElementById("poiSummary"),
-  poiChips: document.getElementById("poiChips"),
   voiceNavControls: document.getElementById("voiceNavControls"),
   btnStartNav: document.getElementById("btnStartNav"),
   voiceNavActive: document.getElementById("voiceNavActive"),
@@ -230,18 +228,38 @@ function renderSuggestions(results, targetInput) {
   });
 }
 
-async function searchAddress(query, targetInput) {
+async function searchAddress(rawQuery, targetInput) {
   const token = ++state.addressSearchToken;
-  try {
-    const url = `${NOMINATIM_URL}?format=json&limit=5&countrycodes=uy&viewbox=${MONTEVIDEO_VIEWBOX}&bounded=1&q=${encodeURIComponent(query)}`;
-    const res = await fetch(url, { headers: { Accept: "application/json" } });
-    if (!res.ok) throw new Error("nominatim error");
-    const data = await res.json();
-    if (token !== state.addressSearchToken) return;
-    renderSuggestions(data, targetInput);
-  } catch {
-    if (token === state.addressSearchToken) el.destSuggestions.classList.add("hidden");
+  const results = [];
+
+  // Si el texto tiene forma de cruce ("Calle1 y Calle2"), buscamos el punto
+  // exacto por geometria real de calles (Nominatim no resuelve esquinas).
+  const intersectionParts = parseIntersectionQuery(rawQuery);
+  if (intersectionParts) {
+    try {
+      const point = await findStreetIntersection(intersectionParts[0], intersectionParts[1]);
+      if (point) {
+        results.push({
+          display_name: `🔀 Cruce: ${intersectionParts[0].trim()} y ${intersectionParts[1].trim()}`,
+          lat: point.lat,
+          lon: point.lon,
+        });
+      }
+    } catch {
+      /* si falla, seguimos con la busqueda normal igual */
+    }
   }
+
+  try {
+    const url = `${NOMINATIM_URL}?format=json&limit=5&countrycodes=uy&viewbox=${MONTEVIDEO_VIEWBOX}&bounded=1&q=${encodeURIComponent(`${rawQuery}, Montevideo, Uruguay`)}`;
+    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    if (res.ok) results.push(...(await res.json()));
+  } catch {
+    /* la busqueda de direcciones puede fallar sin romper un resultado de cruce ya encontrado */
+  }
+
+  if (token !== state.addressSearchToken) return;
+  renderSuggestions(results, targetInput);
 }
 
 let addressDebounce = null;
@@ -255,7 +273,7 @@ function wireAddressInput(inputEl) {
       el.destSuggestions.classList.add("hidden");
       return;
     }
-    addressDebounce = setTimeout(() => searchAddress(`${q}, Montevideo, Uruguay`, inputEl), 400);
+    addressDebounce = setTimeout(() => searchAddress(q, inputEl), 400);
   });
 }
 wireAddressInput(el.originInput);
@@ -269,16 +287,10 @@ function clearPoiMarkers() {
 
 async function loadNearbyPOIs(lat, lon) {
   clearPoiMarkers();
-  el.poiSummary.classList.add("hidden");
-  el.poiChips.innerHTML = "";
 
   try {
     const pois = await fetchNearbyPOIs(lat, lon);
-    if (!pois.length) return;
-
-    const counts = {};
     pois.forEach((p) => {
-      counts[p.category] = (counts[p.category] || 0) + 1;
       const icon = L.divIcon({
         className: "",
         html: `<div class="poi-marker">${POI_CATEGORIES[p.category].icon}</div>`,
@@ -289,11 +301,6 @@ async function loadNearbyPOIs(lat, lon) {
       marker.addTo(state.map);
       state.poiMarkers.push(marker);
     });
-
-    el.poiChips.innerHTML = Object.entries(counts)
-      .map(([cat, n]) => `<span class="poi-chip">${POI_CATEGORIES[cat].icon} ${n} ${POI_CATEGORIES[cat].label}</span>`)
-      .join("");
-    el.poiSummary.classList.remove("hidden");
   } catch (e) {
     console.warn("No se pudieron cargar los puntos de interés:", e.message);
   }
