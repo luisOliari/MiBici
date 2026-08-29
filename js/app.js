@@ -36,6 +36,8 @@ const state = {
   trailLayer: null,
   lastTrailPoint: null,
   permissionErrorShown: false,
+  lastFixAt: null,
+  gpsStaleAnnounced: false,
 };
 
 function haversineMeters(lat1, lon1, lat2, lon2) {
@@ -82,6 +84,7 @@ const el = {
   routeElevation: document.getElementById("routeElevation"),
   routeNoKey: document.getElementById("routeNoKey"),
   btnToggleLanes: document.getElementById("btnToggleLanes"),
+  gpsStatus: document.getElementById("gpsStatus"),
   voiceNavControls: document.getElementById("voiceNavControls"),
   btnStartNav: document.getElementById("btnStartNav"),
   voiceNavActive: document.getElementById("voiceNavActive"),
@@ -258,8 +261,15 @@ function requestGeolocation() {
 
 // Seguimiento CONTINUO de posicion (como Waze): actualiza tu marcador, deja
 // una estela de por donde pasaste, y si hay navegacion por voz activa hace
-// avanzar las indicaciones y sigue tu posicion en el mapa. Arranca una sola
-// vez y queda corriendo mientras la app este abierta.
+// avanzar las indicaciones y sigue tu posicion en el mapa.
+//
+// iOS Safari tiene una limitacion conocida: despues de un rato corta en
+// silencio el watchPosition (sin disparar error), sobre todo si la app pasa
+// a segundo plano o la pantalla se atenua. Por eso ademas de arrancarlo,
+// hay un "vigia" que detecta cuando dejo de llegar posicion y lo reinicia solo.
+const GPS_STALE_MS = 12000; // si no llega una posicion nueva en este tiempo, se considera "cortado"
+const GPS_ANNOUNCE_STALE_MS = 20000; // recien a partir de aca avisamos por voz
+
 function startLiveTracking() {
   if (state.liveWatchId !== null || !navigator.geolocation) return;
 
@@ -278,8 +288,27 @@ function startLiveTracking() {
   );
 }
 
+function restartLiveTracking() {
+  if (state.liveWatchId !== null) {
+    navigator.geolocation.clearWatch(state.liveWatchId);
+    state.liveWatchId = null;
+  }
+  startLiveTracking();
+  // Ademas de reiniciar el watch, pedimos una posicion puntual ya mismo: en
+  // iOS a veces el watch reiniciado tarda en dar la primera señal, y esto
+  // acorta esa espera.
+  navigator.geolocation.getCurrentPosition(
+    (pos) => onLiveLocation(pos.coords.latitude, pos.coords.longitude),
+    () => {},
+    { enableHighAccuracy: true, maximumAge: 4000, timeout: 15000 }
+  );
+}
+
 function onLiveLocation(lat, lon) {
   state.userLocation = { lat, lon };
+  state.lastFixAt = Date.now();
+  state.gpsStaleAnnounced = false;
+  updateGpsStatusBadge();
   placeUserMarker(lat, lon);
 
   if (!state.lastTrailPoint || haversineMeters(state.lastTrailPoint[0], state.lastTrailPoint[1], lat, lon) >= TRAIL_MIN_MOVE_METERS) {
@@ -292,6 +321,42 @@ function onLiveLocation(lat, lon) {
     updateNavProgress(lat, lon);
   }
 }
+
+// Corre siempre en segundo plano revisando si el GPS "se corto". Si pasa
+// demasiado tiempo sin una posicion nueva, reinicia el watch solo y, si
+// estas navegando, te avisa por voz que esta buscando señal de nuevo.
+function updateGpsStatusBadge() {
+  if (!el.gpsStatus) return;
+  if (!state.lastFixAt) {
+    el.gpsStatus.textContent = "🛰️ Sin señal todavía";
+    el.gpsStatus.className = "gps-status warn";
+    return;
+  }
+  const secs = Math.round((Date.now() - state.lastFixAt) / 1000);
+  const stale = Date.now() - state.lastFixAt > GPS_STALE_MS;
+  el.gpsStatus.textContent = stale ? `🛰️ Sin señal hace ${secs}s` : `🛰️ En vivo (hace ${secs}s)`;
+  el.gpsStatus.className = `gps-status ${stale ? "warn" : "ok"}`;
+}
+
+setInterval(() => {
+  updateGpsStatusBadge();
+  if (!state.lastFixAt) return;
+  const staleFor = Date.now() - state.lastFixAt;
+
+  if (staleFor > GPS_STALE_MS) {
+    restartLiveTracking();
+  }
+  if (state.isNavigating && staleFor > GPS_ANNOUNCE_STALE_MS && !state.gpsStaleAnnounced) {
+    state.gpsStaleAnnounced = true;
+    speak("Buscando señal de GPS");
+  }
+}, 4000);
+
+// Si el celular pasa a segundo plano y volves (cambiaste de app, se bloqueo
+// la pantalla), Safari puede haber matado el watch sin avisar: lo reiniciamos.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") restartLiveTracking();
+});
 
 // --- Buscador de direcciones (Nominatim) para origen/destino ---
 function renderSuggestions(results, targetInput) {
@@ -532,6 +597,13 @@ async function calculateRoute() {
     state.routeLayer = L.geoJSON(geojson, {
       style: { color: "#16a34a", weight: 5, opacity: 0.85 },
     }).addTo(state.map);
+
+    // Arranca una estela nueva y limpia para este viaje — si no, la de un
+    // viaje anterior (ej. la ida) quedaba superpuesta y confundia como si
+    // hubiera "varios recorridos" a la vez.
+    state.trailLayer?.setLatLngs([]);
+    state.lastTrailPoint = null;
+
     setCardExpanded(false);
     setTimeout(() => state.map.fitBounds(state.routeLayer.getBounds(), { padding: [40, 100] }), 320);
 

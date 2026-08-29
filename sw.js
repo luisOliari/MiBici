@@ -3,7 +3,8 @@
 // el cascaron de la app disponible aunque se pierda la conexion un instante.
 // Los datos en vivo (clima, rutas, POIs) siguen necesitando internet.
 
-const CACHE_NAME = "mibici-shell-v1";
+const CACHE_NAME = "mibici-shell-v2";
+const TILE_CACHE_NAME = "mibici-tiles-v1";
 const SHELL_FILES = [
   "./",
   "./index.html",
@@ -36,7 +37,28 @@ self.addEventListener("activate", (event) => {
 // externas (open-meteo, nominatim, overpass, openrouteservice) no se tocan.
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
-  if (url.origin !== self.location.origin) return; // dejar pasar las APIs externas tal cual
+
+  // Mosaicos del mapa (OpenStreetMap): cache-first para que el mapa no se
+  // vea gris si se corta la señal un instante mientras vas en bici. Se
+  // actualiza en segundo plano cuando hay conexion.
+  if (/tile\.openstreetmap\.org$/.test(url.hostname)) {
+    event.respondWith(
+      caches.open(TILE_CACHE_NAME).then((cache) =>
+        cache.match(event.request).then((cached) => {
+          const network = fetch(event.request)
+            .then((res) => {
+              cache.put(event.request, res.clone());
+              return res;
+            })
+            .catch(() => cached);
+          return cached || network;
+        })
+      )
+    );
+    return;
+  }
+
+  if (url.origin !== self.location.origin) return; // dejar pasar el resto de APIs externas tal cual
 
   event.respondWith(
     fetch(event.request)
