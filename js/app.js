@@ -148,7 +148,13 @@ function placeUserMarker(lat, lon) {
 }
 
 function placeDestMarker(lat, lon) {
-  const icon = L.divIcon({ className: "", html: '<div class="dest-pin"></div>', iconSize: [26, 26], iconAnchor: [13, 26] });
+  // El pin es un cuadrado rotado -45deg (truco clasico de "gota" con CSS).
+  // La punta filosa, despues de rotar, NO queda en el borde inferior del
+  // cuadrado original sino un poco mas abajo (geometria de la rotacion:
+  // centro + la mitad de la diagonal). Si el iconAnchor no usa ese punto
+  // exacto, el pin se ve corrido unos metros del lugar real — por eso el
+  // destino "no agarraba" bien la esquina exacta.
+  const icon = L.divIcon({ className: "", html: '<div class="dest-pin"></div>', iconSize: [26, 26], iconAnchor: [13, 31] });
   if (state.destMarker) state.destMarker.setLatLng([lat, lon]);
   else state.destMarker = L.marker([lat, lon], { icon, zIndexOffset: 900 }).addTo(state.map);
 }
