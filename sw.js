@@ -3,7 +3,7 @@
 // el cascaron de la app disponible aunque se pierda la conexion un instante.
 // Los datos en vivo (clima, rutas, POIs) siguen necesitando internet.
 
-const CACHE_NAME = "mibici-shell-v2";
+const CACHE_NAME = "mibici-shell-v3";
 const TILE_CACHE_NAME = "mibici-tiles-v1";
 const SHELL_FILES = [
   "./",
@@ -60,8 +60,16 @@ self.addEventListener("fetch", (event) => {
 
   if (url.origin !== self.location.origin) return; // dejar pasar el resto de APIs externas tal cual
 
+  // OJO: fetch(event.request) por si solo puede resolverse desde el cache
+  // HTTP normal del navegador (no el de este Service Worker) si el servidor
+  // no manda headers agresivos anti-cache — GitHub Pages cachea varios
+  // minutos. Eso hacia que "network-first" en realidad sirviera una version
+  // vieja sin que nos dieramos cuenta. Con cache:"no-store" forzamos que
+  // esto SIEMPRE vaya a buscar la version real y actual al servidor.
+  const freshRequest = new Request(event.request.url, { cache: "no-store" });
+
   event.respondWith(
-    fetch(event.request)
+    fetch(freshRequest)
       .then((res) => {
         const copy = res.clone();
         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));

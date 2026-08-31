@@ -186,6 +186,17 @@
   <script src="js/app.js"></script>
   <script>
     if ("serviceWorker" in navigator) {
+      // Cuando hay una version nueva del Service Worker, el navegador la deja
+      // "esperando" hasta que toma control — pero eso no actualiza sola la
+      // pagina ya abierta. Sin esto, podias seguir viendo codigo viejo aunque
+      // el arreglo ya estuviera publicado, hasta cerrar y abrir la app varias
+      // veces. Con esto se recarga sola apenas la version nueva toma control.
+      let swRefreshing = false;
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (swRefreshing) return;
+        swRefreshing = true;
+        window.location.reload();
+      });
       window.addEventListener("load", () => {
         navigator.serviceWorker.register("sw.js").catch(() => {});
       });

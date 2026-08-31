@@ -458,7 +458,11 @@ function clearPoiMarkers() {
   state.poiMarkers = [];
 }
 
-async function loadNearbyPOIs(lat, lon) {
+// Reintenta unas veces con espera creciente antes de darse por vencido: en
+// bici es comun perder señal un instante (entre antenas, tunel, etc.) y
+// antes esto fallaba en silencio, dando la sensacion de que los lugares
+// "desaparecian" del mapa sin ningun aviso.
+async function loadNearbyPOIs(lat, lon, attempt = 1) {
   clearPoiMarkers();
 
   try {
@@ -477,7 +481,12 @@ async function loadNearbyPOIs(lat, lon) {
       state.poiMarkers.push(marker);
     });
   } catch (e) {
-    console.warn("No se pudieron cargar los puntos de interés:", e.message);
+    console.warn(`No se pudieron cargar los puntos de interés (intento ${attempt}):`, e.message);
+    if (attempt < 3) {
+      setTimeout(() => loadNearbyPOIs(lat, lon, attempt + 1), 3000 * attempt);
+    } else {
+      setStatus("No se pudieron cargar los lugares cercanos (sin señal/conexión) — probá tocar 📍 para reintentar", "error");
+    }
   }
 }
 
@@ -772,7 +781,14 @@ function updateNavProgress(lat, lon) {
 }
 
 function startVoiceNavigation() {
-  if (!state.navSteps.length) return;
+  if (!state.navSteps.length) {
+    setStatus("Primero calculá una ruta para poder navegar por voz", "error");
+    return;
+  }
+  if (!("speechSynthesis" in window)) {
+    setStatus("Tu navegador no soporta indicaciones por voz", "error");
+    return;
+  }
 
   state.isNavigating = true;
   el.voiceNavControls.classList.add("hidden");
@@ -830,7 +846,10 @@ el.btnSaveKey.addEventListener("click", () => {
   }
 });
 
-el.btnLocate.addEventListener("click", requestGeolocation);
+el.btnLocate.addEventListener("click", () => {
+  requestGeolocation();
+  if (state.destLocation) loadNearbyPOIs(state.destLocation.lat, state.destLocation.lon);
+});
 el.btnCalcRoute.addEventListener("click", calculateRoute);
 
 document.addEventListener("click", (e) => {
@@ -838,5 +857,14 @@ document.addEventListener("click", (e) => {
 });
 
 if (!getOrsKey()) el.routeNoKey.classList.remove("hidden");
+
+// Los cortes de señal andando en bici son el motivo mas comun de que el
+// clima, el mapa, los lugares cercanos o la ruta parezcan "fallar" sin
+// explicacion — avisamos claramente cuando pasa, en vez de fallar en silencio.
+window.addEventListener("offline", () => setStatus("📶 Sin conexión — el mapa, el clima y las rutas necesitan internet", "error"));
+window.addEventListener("online", () => {
+  setStatus(null);
+  if (state.destLocation) loadNearbyPOIs(state.destLocation.lat, state.destLocation.lon);
+});
 
 requestGeolocation();
