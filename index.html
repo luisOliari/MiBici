@@ -20,7 +20,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
 <link rel="stylesheet" href="vendor/leaflet.css" />
-<link rel="stylesheet" href="css/style.css?v=2026.09.27-3" />
+<link rel="stylesheet" href="css/style.css?v=2026.09.27-4" />
 </head>
 <body>
   <div id="app">
@@ -44,6 +44,7 @@
         <button id="btnToggleLanes" class="floating-pill">🚴 Ver ciclovías</button>
         <div id="gpsStatus" class="floating-pill gps-status warn">Sin señal</div>
       </div>
+      <button id="weatherAlert" class="weather-alert hidden" aria-live="polite"></button>
       <button id="btnLocate" class="floating-round locate-btn" aria-label="Centrar en mi ubicación">◎</button>
       <div id="statusBanner" class="status-banner">Obteniendo tu ubicación…</div>
 
@@ -118,7 +119,7 @@
         <p id="routeVia" class="route-via"></p>
 
         <div class="route-chips">
-          <span class="chip">🌧️ <span id="routeRain">—</span></span>
+          <span id="routeRainChip" class="chip">🌧️ <span id="routeRain">—</span></span>
           <span class="chip">💨 <span id="routeWind">—</span></span>
           <span class="chip">⛰️ <span id="routeElevation">—</span></span>
         </div>
@@ -195,19 +196,19 @@
   </div>
 
   <script src="vendor/leaflet.js"></script>
-  <script src="js/weather.js?v=2026.09.27-3"></script>
-  <script src="js/poi.js?v=2026.09.27-3"></script>
-  <script src="js/bikelanes.js?v=2026.09.27-3"></script>
-  <script src="js/intersection.js?v=2026.09.27-3"></script>
-  <script src="js/voice.js?v=2026.09.27-3"></script>
-  <script src="js/app.js?v=2026.09.27-3"></script>
+  <script src="js/weather.js?v=2026.09.27-4"></script>
+  <script src="js/poi.js?v=2026.09.27-4"></script>
+  <script src="js/bikelanes.js?v=2026.09.27-4"></script>
+  <script src="js/intersection.js?v=2026.09.27-4"></script>
+  <script src="js/voice.js?v=2026.09.27-4"></script>
+  <script src="js/app.js?v=2026.09.27-4"></script>
   <script>
     // --- Actualizacion garantizada ---------------------------------------
     // iPhone (sobre todo con la app en la pantalla de inicio) puede quedarse
     // con archivos viejos guardados. Al abrir y al volver a la app,
     // comparamos esta version con version.json del servidor; si hay una
     // nueva, borramos todo lo guardado y recargamos.
-    const APP_VERSION = "2026.09.27-3";
+    const APP_VERSION = "2026.09.27-4";
     document.getElementById("appVersion").textContent = APP_VERSION;
 
     async function hardRefresh() {

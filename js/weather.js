@@ -178,11 +178,18 @@ function computeVerdict(vehicle, w) {
     if (w.temperature >= t.tempHotWarn) reasons.push("mucho calor");
   }
 
+  // Nivel de cada factor por separado, para pintar en rojo/naranja el dato culpable.
+  const factors = {
+    rain: raining || rainProb >= t.rainProbBad ? "bad" : rainProb >= t.rainProbWarn ? "warn" : "ok",
+    wind: w.windSpeed >= t.windBad ? "bad" : w.windSpeed >= t.windWarn ? "warn" : "ok",
+    temp: w.temperature <= t.tempColdWarn || w.temperature >= t.tempHotWarn ? "warn" : "ok",
+  };
+
   const labels = {
     ok: "Condiciones buenas para salir",
     warn: `Con precaución: ${reasons.join(", ")}`,
     bad: `No recomendado: ${reasons.join(", ")}`,
   };
 
-  return { level, label: labels[level] };
+  return { level, label: labels[level], factors, raining };
 }

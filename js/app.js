@@ -97,6 +97,8 @@ const el = {
   routeEta: $("routeEta"),
   routeVia: $("routeVia"),
   routeRain: $("routeRain"),
+  routeRainChip: $("routeRainChip"),
+  weatherAlert: $("weatherAlert"),
   routeWind: $("routeWind"),
   routeElevation: $("routeElevation"),
   stepList: $("stepList"),
@@ -282,6 +284,7 @@ function renderWeather() {
   el.verdictLabel.textContent = verdict.label;
   el.weatherVerdict.className = `weather-verdict verdict-${verdict.level}`;
   el.verdictVehicle.textContent = state.vehicle === "monopatin" ? "monopatín" : "bici";
+  renderWeatherAlert(verdict, w);
 
   el.weatherFeelsLike.textContent = w.apparentTemperature != null ? `${Math.round(w.apparentTemperature)}°` : "—";
   el.weatherHumidity.textContent = w.humidity != null ? `${w.humidity}%` : "—";
@@ -292,6 +295,53 @@ function renderWeather() {
 
   updateDaylightNote();
 }
+
+// Cuando no conviene salir, que se VEA: el icono del clima en un circulo rojo
+// que late, los datos culpables en rojo/naranja y una pildora sobre el mapa
+// (visible aunque la tarjeta este achicada). Tocandola se abre el clima.
+function renderWeatherAlert(verdict, w) {
+  const f = verdict.factors;
+  el.weatherIcon.className = `weather-icon alert-${verdict.level}`;
+  el.weatherRain.className = `stat-${f.rain}`;
+  el.weatherWind.className = `stat-${f.wind}`;
+  el.weatherGusts.className = `weather-stat-value stat-${f.wind}`;
+  el.weatherTemp.className = `weather-temp stat-${f.temp}`;
+  el.weatherFeelsLike.className = `weather-stat-value stat-${f.temp}`;
+
+  if (verdict.level === "ok") {
+    el.weatherAlert.classList.add("hidden");
+    return;
+  }
+  const vehicle = state.vehicle === "monopatin" ? "monopatín" : "bici";
+  let icon, text;
+  if (f.rain === "bad") {
+    icon = weatherCodeToIcon(w.weatherCode);
+    text = verdict.raining ? `Está lloviendo: mejor no salir en ${vehicle}` : `Lluvia ${w.rainProbability}%: mejor no salir en ${vehicle}`;
+  } else if (f.wind === "bad") {
+    icon = "💨";
+    text = `Viento fuerte (${Math.round(w.windSpeed)} km/h): mejor no salir`;
+  } else if (f.rain === "warn") {
+    icon = "🌦️";
+    text = `Puede llover (${w.rainProbability}%): llevá campera`;
+  } else if (f.wind === "warn") {
+    icon = "💨";
+    text = `Viento moderado (${Math.round(w.windSpeed)} km/h)`;
+  } else {
+    icon = w.temperature >= 30 ? "🥵" : "🥶";
+    text = w.temperature >= 30 ? "Mucho calor: llevá agua" : "Hace mucho frío: abrigate";
+  }
+  el.weatherAlert.innerHTML = `<span class="weather-alert-icon">${icon}</span><span>${escapeHtml(text)}</span>`;
+  el.weatherAlert.className = `weather-alert alert-${verdict.level}`;
+}
+
+el.weatherAlert.addEventListener("click", () => {
+  setSheetMode("expanded");
+  // Solo scrollea la tarjeta (scrollIntoView movia toda la pagina en iPhone).
+  setTimeout(() => {
+    const section = el.weatherCard.querySelector(".weather-section");
+    if (section) el.weatherCard.scrollTo({ top: section.offsetTop - 8, behavior: "smooth" });
+  }, 320);
+});
 
 // Avisa si ahora mismo (o la llegada estimada de una ruta calculada) cae
 // cerca o despues de la puesta de sol — relevante para andar seguro en bici.
@@ -988,6 +1038,9 @@ function selectRoute(i) {
 
   const rain = state.weather ? getRainProbabilityForWindow(state.weather, new Date(), route.duration) : null;
   el.routeRain.textContent = rain != null ? `lluvia ${rain}%` : "lluvia s/d";
+  const t = VEHICLE_THRESHOLDS[state.vehicle] || VEHICLE_THRESHOLDS.bici;
+  const rainLevel = rain == null ? "ok" : rain >= t.rainProbBad ? "bad" : rain >= t.rainProbWarn ? "warn" : "ok";
+  el.routeRainChip.className = `chip chip-${rainLevel}`;
   updateDaylightNote(etaDate);
 
   if (state.weather?.windDirection != null && origin) {

@@ -3,7 +3,7 @@
 // el cascaron de la app disponible aunque se pierda la conexion un instante.
 // Los datos en vivo (clima, rutas, POIs) siguen necesitando internet.
 
-const CACHE_NAME = "mibici-shell-v7";
+const CACHE_NAME = "mibici-shell-v8";
 const TILE_CACHE_NAME = "mibici-tiles-v1";
 const SHELL_FILES = [
   "./",
