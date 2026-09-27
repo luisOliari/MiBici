@@ -3,7 +3,7 @@
 // el cascaron de la app disponible aunque se pierda la conexion un instante.
 // Los datos en vivo (clima, rutas, POIs) siguen necesitando internet.
 
-const CACHE_NAME = "mibici-shell-v5";
+const CACHE_NAME = "mibici-shell-v6";
 const TILE_CACHE_NAME = "mibici-tiles-v1";
 const SHELL_FILES = [
   "./",
@@ -60,6 +60,7 @@ self.addEventListener("fetch", (event) => {
   }
 
   if (url.origin !== self.location.origin) return; // dejar pasar el resto de APIs externas tal cual
+  if (url.pathname.endsWith("/version.json")) return; // siempre directo al servidor
 
   // OJO: fetch(event.request) por si solo puede resolverse desde el cache
   // HTTP normal del navegador (no el de este Service Worker) si el servidor
@@ -76,6 +77,6 @@ self.addEventListener("fetch", (event) => {
         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
         return res;
       })
-      .catch(() => caches.match(event.request))
+      .catch(() => caches.match(event.request, { ignoreSearch: true }))
   );
 });

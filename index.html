@@ -20,7 +20,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
 <link rel="stylesheet" href="vendor/leaflet.css" />
-<link rel="stylesheet" href="css/style.css" />
+<link rel="stylesheet" href="css/style.css?v=2026.09.27-2" />
 </head>
 <body>
   <div id="app">
@@ -186,24 +186,65 @@
         </p>
         <button id="btnSaveKey" class="btn-primary">Guardar</button>
         <p id="keyStatus" class="key-status"></p>
+        <p class="settings-help">Versión de la app: <strong id="appVersion"></strong></p>
+        <button id="btnForceUpdate" class="btn-secondary">Buscar actualización</button>
       </div>
     </section>
 
   </div>
 
   <script src="vendor/leaflet.js"></script>
-  <script src="js/weather.js"></script>
-  <script src="js/poi.js"></script>
-  <script src="js/bikelanes.js"></script>
-  <script src="js/intersection.js"></script>
-  <script src="js/voice.js"></script>
-  <script src="js/app.js"></script>
+  <script src="js/weather.js?v=2026.09.27-2"></script>
+  <script src="js/poi.js?v=2026.09.27-2"></script>
+  <script src="js/bikelanes.js?v=2026.09.27-2"></script>
+  <script src="js/intersection.js?v=2026.09.27-2"></script>
+  <script src="js/voice.js?v=2026.09.27-2"></script>
+  <script src="js/app.js?v=2026.09.27-2"></script>
   <script>
+    // --- Actualizacion garantizada ---------------------------------------
+    // iPhone (sobre todo con la app en la pantalla de inicio) puede quedarse
+    // con archivos viejos guardados. Al abrir y al volver a la app,
+    // comparamos esta version con version.json del servidor; si hay una
+    // nueva, borramos todo lo guardado y recargamos.
+    const APP_VERSION = "2026.09.27-2";
+    document.getElementById("appVersion").textContent = APP_VERSION;
+
+    async function hardRefresh() {
+      try {
+        const regs = (await navigator.serviceWorker?.getRegistrations?.()) || [];
+        await Promise.all(regs.map((r) => r.unregister()));
+        const keys = (await window.caches?.keys()) || [];
+        await Promise.all(keys.filter((k) => k.startsWith("mibici-shell")).map((k) => caches.delete(k)));
+      } catch {}
+      location.replace(location.pathname + "?v=" + Date.now());
+    }
+
+    async function checkForUpdate({ manual } = {}) {
+      try {
+        const res = await fetch("version.json?t=" + Date.now(), { cache: "no-store" });
+        const { version } = await res.json();
+        if (version && version !== APP_VERSION) {
+          if (window.__mibiciNavigating && !manual) return; // no cortar un viaje
+          // Seguro anti-bucle: como mucho una recarga automatica cada 5 min.
+          let last = 0;
+          try { last = Number(sessionStorage.getItem("mibiciHardRefreshAt")) || 0; } catch {}
+          if (!manual && Date.now() - last < 5 * 60 * 1000) return;
+          try { sessionStorage.setItem("mibiciHardRefreshAt", String(Date.now())); } catch {}
+          await hardRefresh();
+        } else if (manual) {
+          alert("Ya tenés la última versión (" + APP_VERSION + ")");
+        }
+      } catch {
+        if (manual) alert("Sin conexión: no pude buscar actualizaciones");
+      }
+    }
+    document.getElementById("btnForceUpdate").addEventListener("click", () => checkForUpdate({ manual: true }));
+    checkForUpdate();
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") checkForUpdate();
+    });
+
     if ("serviceWorker" in navigator) {
-      // Cuando hay una version nueva del Service Worker, el navegador la deja
-      // "esperando" hasta que toma control — pero eso no actualiza sola la
-      // pagina ya abierta. Con esto se recarga sola apenas la version nueva
-      // toma control (salvo en plena navegacion, para no cortar el viaje).
       let swRefreshing = false;
       navigator.serviceWorker.addEventListener("controllerchange", () => {
         if (swRefreshing || window.__mibiciNavigating) return;
@@ -211,7 +252,10 @@
         window.location.reload();
       });
       window.addEventListener("load", () => {
-        navigator.serviceWorker.register("sw.js").catch(() => {});
+        navigator.serviceWorker
+          .register("sw.js", { updateViaCache: "none" })
+          .then((reg) => reg.update())
+          .catch(() => {});
       });
     }
   </script>
