@@ -2,19 +2,23 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
 <title>MiBici — Movilidad en Bici y Monopatín, Montevideo</title>
 
 <!-- PWA: permite "Agregar a pantalla de inicio" como app, con icono y sin barra del navegador -->
 <link rel="manifest" href="manifest.json" />
 <link rel="icon" href="icons/icon-192.png" />
 <link rel="apple-touch-icon" href="icons/icon-192.png" />
-<meta name="theme-color" content="#16a34a" />
+<meta name="theme-color" content="#000000" />
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black" />
 <meta name="apple-mobile-web-app-title" content="MiBici" />
 
+<!-- Diseño: ver DESIGN.md (tipografia Inter, blanco/negro + verde de ruta) -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
 <link rel="stylesheet" href="vendor/leaflet.css" />
 <link rel="stylesheet" href="css/style.css" />
 </head>
@@ -26,134 +30,144 @@
         <span class="logo">🚲</span>
         <span class="app-name">MiBici</span>
       </div>
-      <div class="header-actions">
-        <button id="btnSettings" class="icon-btn" aria-label="Configuración">⚙️</button>
-        <button id="btnLocate" class="icon-btn" aria-label="Actualizar ubicación">📍</button>
+      <div class="vehicle-toggle" role="tablist">
+        <button class="vehicle-btn active" data-vehicle="bici" role="tab">🚲 Bici</button>
+        <button class="vehicle-btn" data-vehicle="monopatin" role="tab">🛴 Monopatín</button>
       </div>
+      <button id="btnSettings" class="icon-btn" aria-label="Configuración">⚙️</button>
     </header>
-
-    <div class="vehicle-toggle" role="tablist">
-      <button class="vehicle-btn active" data-vehicle="bici" role="tab">🚲 Bici</button>
-      <button class="vehicle-btn" data-vehicle="monopatin" role="tab">🛴 Monopatín</button>
-    </div>
 
     <main class="map-wrap">
       <div id="map"></div>
-      <button id="btnToggleLanes" class="lanes-toggle">🚴 Ver ciclovías</button>
-      <div id="gpsStatus" class="gps-status warn">🛰️ Sin señal todavía</div>
+
+      <div class="map-pills">
+        <button id="btnToggleLanes" class="floating-pill">🚴 Ver ciclovías</button>
+        <div id="gpsStatus" class="floating-pill gps-status warn">Sin señal</div>
+      </div>
+      <button id="btnLocate" class="floating-round locate-btn" aria-label="Centrar en mi ubicación">◎</button>
       <div id="statusBanner" class="status-banner">Obteniendo tu ubicación…</div>
+
+      <!-- Modo navegacion (tipo Waze): instruccion grande arriba, datos abajo -->
+      <div id="navBanner" class="nav-banner hidden" aria-live="polite">
+        <div class="nav-main">
+          <div id="navArrow" class="nav-arrow">↑</div>
+          <div class="nav-text">
+            <div id="navDistance" class="nav-distance">—</div>
+            <div id="navInstruction" class="nav-instruction">—</div>
+          </div>
+        </div>
+        <div id="navThen" class="nav-then hidden"></div>
+      </div>
+      <div id="navFooter" class="nav-footer hidden">
+        <div class="nav-footer-stats">
+          <div><span id="navEta" class="nav-footer-big">—</span><span class="nav-footer-label">llegada</span></div>
+          <div><span id="navRemainingTime" class="nav-footer-big">—</span><span class="nav-footer-label">restan</span></div>
+          <div><span id="navRemainingDist" class="nav-footer-big">—</span><span class="nav-footer-label">km</span></div>
+        </div>
+        <div class="nav-footer-actions">
+          <button id="btnMute" class="btn-secondary btn-round" aria-label="Silenciar voz">🔊</button>
+          <button id="btnStopNav" class="btn-secondary">Salir</button>
+        </div>
+      </div>
     </main>
 
-    <section id="weatherCard" class="weather-card collapsed">
+    <section id="weatherCard" class="sheet-card collapsed">
       <button id="cardHandle" class="card-handle" aria-label="Expandir/achicar tarjeta"></button>
-
-      <div class="weather-top">
-        <div class="weather-temp-block">
-          <span id="weatherIcon" class="weather-icon">⏳</span>
-          <span id="weatherTemp" class="weather-temp">—°</span>
-        </div>
-        <div id="weatherVerdict" class="weather-verdict verdict-loading">
-          <span id="verdictLabel">Consultando clima…</span>
-        </div>
-      </div>
-
-      <div id="weatherDetails" class="weather-details">
-        <span id="weatherWind">Viento: —</span>
-        <span id="weatherRain">Lluvia: —</span>
-      </div>
-
-      <div class="weather-grid">
-        <div class="weather-stat">
-          <span class="weather-stat-label">Sensación</span>
-          <span id="weatherFeelsLike" class="weather-stat-value">—</span>
-        </div>
-        <div class="weather-stat">
-          <span class="weather-stat-label">Humedad</span>
-          <span id="weatherHumidity" class="weather-stat-value">—</span>
-        </div>
-        <div class="weather-stat">
-          <span class="weather-stat-label">Ráfagas</span>
-          <span id="weatherGusts" class="weather-stat-value">—</span>
-        </div>
-        <div class="weather-stat">
-          <span class="weather-stat-label">Índice UV</span>
-          <span id="weatherUv" class="weather-stat-value">—</span>
-        </div>
-        <div class="weather-stat">
-          <span class="weather-stat-label">Calidad aire</span>
-          <span id="weatherAqi" class="weather-stat-value">—</span>
-        </div>
-        <div class="weather-stat">
-          <span class="weather-stat-label">Amanecer</span>
-          <span id="weatherSunrise" class="weather-stat-value">—</span>
-        </div>
-        <div class="weather-stat">
-          <span class="weather-stat-label">Atardecer</span>
-          <span id="weatherSunset" class="weather-stat-value">—</span>
-        </div>
-      </div>
-      <p id="daylightNote" class="daylight-note hidden">🌙 Va a estar oscuro durante parte o todo el viaje — llevá luces.</p>
-
-      <p class="data-source">Clima real: Open-Meteo · verdicto calculado para <span id="verdictVehicle">bici</span></p>
 
       <div class="route-form">
         <div class="route-field">
           <span class="route-dot origin"></span>
-          <input id="originInput" type="text" placeholder="Origen: mi ubicación" />
+          <input id="originInput" type="text" placeholder="Desde: mi ubicación" autocomplete="off" />
         </div>
-        <div class="route-field">
+
+        <div class="mode-toggle" role="tablist" aria-label="Tipo de destino">
+          <button class="mode-btn active" data-mode="address">📍 Dirección</button>
+          <button class="mode-btn" data-mode="corner">🔀 Esquina</button>
+        </div>
+
+        <div id="addressMode" class="route-field">
           <span class="route-dot destination"></span>
-          <input id="destInput" type="text" placeholder="¿A dónde vas? (dirección, barrio...)" />
-          <div id="destSuggestions" class="suggestions hidden"></div>
+          <input id="destInput" type="text" placeholder="¿A dónde vas? Ej: Julio César y 26 de Marzo" autocomplete="off" />
+          <button id="btnClearDest" class="clear-btn hidden" aria-label="Borrar">✕</button>
         </div>
+
+        <div id="cornerMode" class="corner-fields hidden">
+          <div class="route-field">
+            <span class="route-dot destination"></span>
+            <input id="cornerStreetA" type="text" placeholder="Calle (ej: Julio César)" autocomplete="off" />
+          </div>
+          <div class="route-field">
+            <span class="corner-and">y</span>
+            <input id="cornerStreetB" type="text" placeholder="Esquina (ej: 26 de Marzo)" autocomplete="off" />
+          </div>
+        </div>
+
+        <div id="destSuggestions" class="suggestions hidden"></div>
+        <p class="form-hint">Tip: también podés mantener apretado un punto del mapa para ir ahí.</p>
+
         <button id="btnCalcRoute" class="btn-primary">Calcular ruta</button>
       </div>
 
       <div id="routeResult" class="route-result hidden">
-        <div class="route-stats">
-          <div class="route-stat">
-            <span class="route-stat-label">Distancia</span>
-            <span id="routeDistance" class="route-stat-value">—</span>
-          </div>
-          <div class="route-stat">
-            <span class="route-stat-label">Duración</span>
-            <span id="routeDuration" class="route-stat-value">—</span>
-          </div>
-          <div class="route-stat">
-            <span class="route-stat-label">Llegada est.</span>
-            <span id="routeEta" class="route-stat-value">—</span>
-          </div>
-          <div class="route-stat">
-            <span class="route-stat-label">Lluvia en el trayecto</span>
-            <span id="routeRain" class="route-stat-value">—</span>
-          </div>
-          <div class="route-stat">
-            <span class="route-stat-label">Viento</span>
-            <span id="routeWind" class="route-stat-value">—</span>
-          </div>
-          <div class="route-stat">
-            <span class="route-stat-label">Desnivel</span>
-            <span id="routeElevation" class="route-stat-value">—</span>
-          </div>
+        <div class="route-headline">
+          <span id="routeDuration" class="route-big">—</span>
+          <span id="routeDistance" class="route-sub">—</span>
+          <span class="route-sub">· llegás <strong id="routeEta">—</strong></span>
         </div>
-        <p class="route-note">Ruta tranquila para bici/monopatín: prioriza ciclovías y evita avenidas. No refleja tránsito vehicular en vivo (no existe una fuente pública de tránsito en tiempo real para Montevideo).</p>
+        <p id="routeVia" class="route-via"></p>
+
+        <div class="route-chips">
+          <span class="chip">🌧️ <span id="routeRain">—</span></span>
+          <span class="chip">💨 <span id="routeWind">—</span></span>
+          <span class="chip">⛰️ <span id="routeElevation">—</span></span>
+        </div>
 
         <div id="voiceNavControls" class="voice-nav hidden">
-          <button id="btnStartNav" class="btn-primary">🔊 Iniciar navegación por voz</button>
-        </div>
-        <div id="voiceNavActive" class="voice-nav-active hidden">
-          <p class="voice-next-label">🔊 Próxima indicación</p>
-          <p id="voiceNextInstruction" class="voice-next-instruction">—</p>
-          <p id="voiceNextDistance" class="voice-next-distance"></p>
-          <button id="btnStopNav" class="btn-secondary">⏹ Detener navegación</button>
+          <button id="btnStartNav" class="btn-primary">▶ Iniciar navegación por voz</button>
         </div>
         <p id="voiceNotSupported" class="voice-not-supported hidden">
           Tu navegador no soporta indicaciones por voz. Vas a poder ver la ruta en el mapa igual.
         </p>
+
+        <details class="steps-details">
+          <summary>Ver el trayecto paso a paso</summary>
+          <ol id="stepList" class="step-list"></ol>
+        </details>
+
+        <p class="route-note">Ruta tranquila para bici/monopatín: prioriza ciclovías y evita avenidas. No refleja tránsito vehicular en vivo.</p>
       </div>
 
       <div id="routeNoKey" class="route-nokey hidden">
         Para calcular rutas necesitás una API key gratuita de OpenRouteService. Tocá ⚙️ para configurarla.
+      </div>
+
+      <div class="weather-section">
+        <div class="weather-top">
+          <div class="weather-temp-block">
+            <span id="weatherIcon" class="weather-icon">⏳</span>
+            <span id="weatherTemp" class="weather-temp">—°</span>
+          </div>
+          <div id="weatherVerdict" class="weather-verdict verdict-loading">
+            <span id="verdictLabel">Consultando clima…</span>
+          </div>
+        </div>
+
+        <div id="weatherDetails" class="weather-details">
+          <span id="weatherWind">Viento: —</span>
+          <span id="weatherRain">Lluvia: —</span>
+        </div>
+
+        <div class="weather-grid">
+          <div class="weather-stat"><span class="weather-stat-label">Sensación</span><span id="weatherFeelsLike" class="weather-stat-value">—</span></div>
+          <div class="weather-stat"><span class="weather-stat-label">Humedad</span><span id="weatherHumidity" class="weather-stat-value">—</span></div>
+          <div class="weather-stat"><span class="weather-stat-label">Ráfagas</span><span id="weatherGusts" class="weather-stat-value">—</span></div>
+          <div class="weather-stat"><span class="weather-stat-label">Índice UV</span><span id="weatherUv" class="weather-stat-value">—</span></div>
+          <div class="weather-stat"><span class="weather-stat-label">Calidad aire</span><span id="weatherAqi" class="weather-stat-value">—</span></div>
+          <div class="weather-stat"><span class="weather-stat-label">Amanecer</span><span id="weatherSunrise" class="weather-stat-value">—</span></div>
+          <div class="weather-stat"><span class="weather-stat-label">Atardecer</span><span id="weatherSunset" class="weather-stat-value">—</span></div>
+        </div>
+        <p id="daylightNote" class="daylight-note hidden">🌙 Va a estar oscuro durante parte o todo el viaje — llevá luces.</p>
+        <p class="data-source">Clima real: Open-Meteo · veredicto calculado para <span id="verdictVehicle">bici</span></p>
       </div>
     </section>
 
@@ -188,12 +202,11 @@
     if ("serviceWorker" in navigator) {
       // Cuando hay una version nueva del Service Worker, el navegador la deja
       // "esperando" hasta que toma control — pero eso no actualiza sola la
-      // pagina ya abierta. Sin esto, podias seguir viendo codigo viejo aunque
-      // el arreglo ya estuviera publicado, hasta cerrar y abrir la app varias
-      // veces. Con esto se recarga sola apenas la version nueva toma control.
+      // pagina ya abierta. Con esto se recarga sola apenas la version nueva
+      // toma control (salvo en plena navegacion, para no cortar el viaje).
       let swRefreshing = false;
       navigator.serviceWorker.addEventListener("controllerchange", () => {
-        if (swRefreshing) return;
+        if (swRefreshing || window.__mibiciNavigating) return;
         swRefreshing = true;
         window.location.reload();
       });

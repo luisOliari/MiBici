@@ -2,6 +2,7 @@
 const FALLBACK_LOCATION = { lat: -34.9058, lon: -56.1913 };
 const MONTEVIDEO_VIEWBOX = "-56.42,-34.70,-55.95,-34.95"; // left,top,right,bottom
 const NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
+const NOMINATIM_REVERSE_URL = "https://nominatim.openstreetmap.org/reverse";
 const ORS_KEY_STORAGE = "mibici_ors_key";
 
 // Perfil de ruteo de OpenRouteService: no existe un perfil especifico de
@@ -9,29 +10,36 @@ const ORS_KEY_STORAGE = "mibici_ors_key";
 // y calles tranquilas) para bici y monopatin.
 const ORS_PROFILE = "cycling-regular";
 
+// Colores de la linea de ruta (ver DESIGN.md: route / route-casing / route-done)
+const ROUTE_COLOR = "#16a34a";
+const ROUTE_CASING = "#0b5d2a";
+const ROUTE_DONE = "#9ca3af";
+
 const state = {
   userLocation: null,
+  userAccuracy: null,
   originLocation: null, // si el usuario elige un origen distinto al GPS
   destLocation: null,
+  destLabel: "",
+  destMode: "address", // "address" | "corner"
   vehicle: "bici",
   weather: null,
   airQuality: null,
   map: null,
   userMarker: null,
   destMarker: null,
-  routeLayer: null,
+  routeLayers: null, // { casing, line, done, turns }
   poiMarkers: [],
   cyclewaysLayer: null,
   cyclewaysVisible: false,
   activeSuggestionInput: null,
   addressSearchToken: 0,
-  navSteps: [],
-  navIndex: 0,
-  routeVertices: null,
-  routeCumDist: null,
+  route: null, // { vertices, cumDist, total, duration, steps }
+  nav: null, // estado de la navegacion en curso (ver startNavigation)
   wakeLock: null,
   isNavigating: false,
   cardExpanded: false,
+  sheetMode: "collapsed",
   liveWatchId: null,
   trailLayer: null,
   lastTrailPoint: null,
@@ -49,57 +57,80 @@ function haversineMeters(lat1, lon1, lat2, lon2) {
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
+const $ = (id) => document.getElementById(id);
 const el = {
-  statusBanner: document.getElementById("statusBanner"),
-  weatherCard: document.getElementById("weatherCard"),
-  cardHandle: document.getElementById("cardHandle"),
-  btnLocate: document.getElementById("btnLocate"),
-  btnSettings: document.getElementById("btnSettings"),
+  app: $("app"),
+  statusBanner: $("statusBanner"),
+  weatherCard: $("weatherCard"),
+  cardHandle: $("cardHandle"),
+  btnLocate: $("btnLocate"),
+  btnSettings: $("btnSettings"),
   vehicleBtns: document.querySelectorAll(".vehicle-btn"),
-  weatherIcon: document.getElementById("weatherIcon"),
-  weatherTemp: document.getElementById("weatherTemp"),
-  weatherVerdict: document.getElementById("weatherVerdict"),
-  verdictLabel: document.getElementById("verdictLabel"),
-  verdictVehicle: document.getElementById("verdictVehicle"),
-  weatherWind: document.getElementById("weatherWind"),
-  weatherRain: document.getElementById("weatherRain"),
-  weatherFeelsLike: document.getElementById("weatherFeelsLike"),
-  weatherHumidity: document.getElementById("weatherHumidity"),
-  weatherGusts: document.getElementById("weatherGusts"),
-  weatherUv: document.getElementById("weatherUv"),
-  weatherSunrise: document.getElementById("weatherSunrise"),
-  weatherSunset: document.getElementById("weatherSunset"),
-  weatherAqi: document.getElementById("weatherAqi"),
-  daylightNote: document.getElementById("daylightNote"),
-  originInput: document.getElementById("originInput"),
-  destInput: document.getElementById("destInput"),
-  destSuggestions: document.getElementById("destSuggestions"),
-  btnCalcRoute: document.getElementById("btnCalcRoute"),
-  routeResult: document.getElementById("routeResult"),
-  routeDistance: document.getElementById("routeDistance"),
-  routeDuration: document.getElementById("routeDuration"),
-  routeEta: document.getElementById("routeEta"),
-  routeRain: document.getElementById("routeRain"),
-  routeWind: document.getElementById("routeWind"),
-  routeElevation: document.getElementById("routeElevation"),
-  routeNoKey: document.getElementById("routeNoKey"),
-  btnToggleLanes: document.getElementById("btnToggleLanes"),
-  gpsStatus: document.getElementById("gpsStatus"),
-  voiceNavControls: document.getElementById("voiceNavControls"),
-  btnStartNav: document.getElementById("btnStartNav"),
-  voiceNavActive: document.getElementById("voiceNavActive"),
-  voiceNextInstruction: document.getElementById("voiceNextInstruction"),
-  voiceNextDistance: document.getElementById("voiceNextDistance"),
-  btnStopNav: document.getElementById("btnStopNav"),
-  voiceNotSupported: document.getElementById("voiceNotSupported"),
-  settingsSheet: document.getElementById("settingsSheet"),
-  btnCloseSettings: document.getElementById("btnCloseSettings"),
-  orsKeyInput: document.getElementById("orsKeyInput"),
-  btnSaveKey: document.getElementById("btnSaveKey"),
-  keyStatus: document.getElementById("keyStatus"),
+  modeBtns: document.querySelectorAll(".mode-btn"),
+  weatherIcon: $("weatherIcon"),
+  weatherTemp: $("weatherTemp"),
+  weatherVerdict: $("weatherVerdict"),
+  verdictLabel: $("verdictLabel"),
+  verdictVehicle: $("verdictVehicle"),
+  weatherWind: $("weatherWind"),
+  weatherRain: $("weatherRain"),
+  weatherFeelsLike: $("weatherFeelsLike"),
+  weatherHumidity: $("weatherHumidity"),
+  weatherGusts: $("weatherGusts"),
+  weatherUv: $("weatherUv"),
+  weatherSunrise: $("weatherSunrise"),
+  weatherSunset: $("weatherSunset"),
+  weatherAqi: $("weatherAqi"),
+  daylightNote: $("daylightNote"),
+  originInput: $("originInput"),
+  destInput: $("destInput"),
+  btnClearDest: $("btnClearDest"),
+  addressMode: $("addressMode"),
+  cornerMode: $("cornerMode"),
+  cornerStreetA: $("cornerStreetA"),
+  cornerStreetB: $("cornerStreetB"),
+  destSuggestions: $("destSuggestions"),
+  btnCalcRoute: $("btnCalcRoute"),
+  routeResult: $("routeResult"),
+  routeDistance: $("routeDistance"),
+  routeDuration: $("routeDuration"),
+  routeEta: $("routeEta"),
+  routeVia: $("routeVia"),
+  routeRain: $("routeRain"),
+  routeWind: $("routeWind"),
+  routeElevation: $("routeElevation"),
+  stepList: $("stepList"),
+  routeNoKey: $("routeNoKey"),
+  btnToggleLanes: $("btnToggleLanes"),
+  gpsStatus: $("gpsStatus"),
+  voiceNavControls: $("voiceNavControls"),
+  btnStartNav: $("btnStartNav"),
+  voiceNotSupported: $("voiceNotSupported"),
+  navBanner: $("navBanner"),
+  navArrow: $("navArrow"),
+  navDistance: $("navDistance"),
+  navInstruction: $("navInstruction"),
+  navThen: $("navThen"),
+  navFooter: $("navFooter"),
+  navEta: $("navEta"),
+  navRemainingTime: $("navRemainingTime"),
+  navRemainingDist: $("navRemainingDist"),
+  btnMute: $("btnMute"),
+  btnStopNav: $("btnStopNav"),
+  settingsSheet: $("settingsSheet"),
+  btnCloseSettings: $("btnCloseSettings"),
+  orsKeyInput: $("orsKeyInput"),
+  btnSaveKey: $("btnSaveKey"),
+  keyStatus: $("keyStatus"),
 };
 
-function setStatus(message, kind) {
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+
+let statusTimer = null;
+function setStatus(message, kind, { autoHideMs } = {}) {
+  clearTimeout(statusTimer);
   if (!message) {
     el.statusBanner.classList.add("hidden");
     return;
@@ -107,25 +138,34 @@ function setStatus(message, kind) {
   el.statusBanner.classList.remove("hidden");
   el.statusBanner.textContent = message;
   el.statusBanner.classList.toggle("error", kind === "error");
+  if (autoHideMs) statusTimer = setTimeout(() => setStatus(null), autoHideMs);
 }
 
 function getOrsKey() {
   return localStorage.getItem(ORS_KEY_STORAGE) || "";
 }
 
-// --- Tarjeta plegable: colapsada deja el mapa casi a pantalla completa ---
-function setCardExpanded(expanded) {
-  state.cardExpanded = expanded;
-  el.weatherCard.classList.toggle("collapsed", !expanded);
+// --- Tarjeta plegable (bottom sheet) con 3 alturas ---
+// collapsed: solo el buscador · preview: resumen de la ruta + "Iniciar"
+// (el mapa muestra el trayecto) · expanded: todo (formulario, pasos, clima).
+function setSheetMode(mode) {
+  if (state.sheetMode === mode) return;
+  state.sheetMode = mode;
+  state.cardExpanded = mode === "expanded";
+  el.weatherCard.classList.toggle("collapsed", mode === "collapsed");
+  el.weatherCard.classList.toggle("preview", mode === "preview");
   // Leaflet cachea el tamaño de su contenedor: hay que avisarle cuando cambia.
   setTimeout(() => state.map?.invalidateSize(), 300);
+}
+function setCardExpanded(expanded) {
+  setSheetMode(expanded ? "expanded" : state.route ? "preview" : "collapsed");
 }
 el.cardHandle.addEventListener("click", (e) => {
   e.stopPropagation();
   setCardExpanded(!state.cardExpanded);
 });
-el.weatherCard.addEventListener("click", () => {
-  if (!state.cardExpanded) setCardExpanded(true);
+el.weatherCard.addEventListener("focusin", (e) => {
+  if (e.target.matches("input")) setCardExpanded(true);
 });
 
 // --- Mapa ---
@@ -135,28 +175,71 @@ function initMap(lat, lon) {
     attribution: "&copy; OpenStreetMap contributors",
     maxZoom: 19,
   }).addTo(state.map);
-  L.control.zoom({ position: "bottomright" }).addTo(state.map);
 
   // Estela del recorrido real (se va dibujando con tu posicion en vivo).
-  state.trailLayer = L.polyline([], { color: "#1e293b", weight: 3, opacity: 0.55 }).addTo(state.map);
+  state.trailLayer = L.polyline([], { color: "#1a73e8", weight: 3, opacity: 0.45, dashArray: "2 6" }).addTo(state.map);
+
+  // Mantener apretado (o clic derecho en PC) = elegir ese punto como destino.
+  state.map.on("contextmenu", (e) => {
+    if (state.isNavigating) return;
+    setDestinationFromMap(e.latlng.lat, e.latlng.lng);
+  });
+
+  // Si movés el mapa con el dedo durante la navegacion, dejamos de seguirte
+  // un rato (como Waze) para que puedas mirar; ◎ vuelve a centrar.
+  state.map.on("dragstart", () => {
+    if (state.nav) state.nav.followPausedUntil = Date.now() + 12000;
+  });
 }
 
 function placeUserMarker(lat, lon) {
-  const icon = L.divIcon({ className: "", html: '<div class="user-dot"></div>', iconSize: [18, 18] });
+  const icon = L.divIcon({ className: "", html: '<div class="user-dot"></div>', iconSize: [20, 20] });
   if (state.userMarker) state.userMarker.setLatLng([lat, lon]);
   else state.userMarker = L.marker([lat, lon], { icon, zIndexOffset: 1000 }).addTo(state.map);
 }
 
 function placeDestMarker(lat, lon) {
   // El pin es un cuadrado rotado -45deg (truco clasico de "gota" con CSS).
-  // La punta filosa, despues de rotar, NO queda en el borde inferior del
-  // cuadrado original sino un poco mas abajo (geometria de la rotacion:
-  // centro + la mitad de la diagonal). Si el iconAnchor no usa ese punto
-  // exacto, el pin se ve corrido unos metros del lugar real — por eso el
-  // destino "no agarraba" bien la esquina exacta.
+  // La punta filosa, despues de rotar, queda en centro + media diagonal: ese
+  // es el iconAnchor exacto para que el pin caiga justo en la esquina.
   const icon = L.divIcon({ className: "", html: '<div class="dest-pin"></div>', iconSize: [26, 26], iconAnchor: [13, 31] });
   if (state.destMarker) state.destMarker.setLatLng([lat, lon]);
   else state.destMarker = L.marker([lat, lon], { icon, zIndexOffset: 900 }).addTo(state.map);
+}
+
+function setDestination(loc, label) {
+  state.destLocation = { lat: loc.lat, lon: loc.lon };
+  state.destLabel = label || "";
+  placeDestMarker(loc.lat, loc.lon);
+  state.map.panTo([loc.lat, loc.lon]);
+  loadNearbyPOIs(loc.lat, loc.lon);
+  el.btnClearDest.classList.toggle("hidden", !el.destInput.value);
+}
+
+async function setDestinationFromMap(lat, lon) {
+  setDestModeUI("address");
+  el.destInput.value = "Punto elegido en el mapa";
+  setDestination({ lat, lon }, "el punto elegido");
+  setCardExpanded(true);
+  const label = await reverseGeocode(lat, lon);
+  if (label && state.destLocation?.lat === lat) {
+    el.destInput.value = label;
+    state.destLabel = label;
+  }
+}
+
+async function reverseGeocode(lat, lon) {
+  try {
+    const res = await fetch(`${NOMINATIM_REVERSE_URL}?format=json&zoom=18&addressdetails=1&lat=${lat}&lon=${lon}`, {
+      headers: { Accept: "application/json" },
+    });
+    if (!res.ok) return null;
+    const a = (await res.json()).address || {};
+    const street = [a.road, a.house_number].filter(Boolean).join(" ");
+    return [street, a.suburb || a.neighbourhood].filter(Boolean).join(", ") || null;
+  } catch {
+    return null;
+  }
 }
 
 // --- Clima ---
@@ -165,8 +248,7 @@ async function loadWeather(lat, lon) {
   el.verdictLabel.textContent = "Consultando clima…";
   el.weatherVerdict.className = "weather-verdict verdict-loading";
   try {
-    const w = await fetchWeather(lat, lon);
-    state.weather = w;
+    state.weather = await fetchWeather(lat, lon);
     renderWeather();
   } catch {
     el.verdictLabel.textContent = "No se pudo obtener el clima";
@@ -253,26 +335,20 @@ function requestGeolocation() {
     (pos) => onLocationReady(pos.coords.latitude, pos.coords.longitude),
     (err) => {
       const messages = {
-        1: "Permiso de ubicación bloqueado. Revisá los permisos del sitio en tu navegador y tocá 📍 de nuevo.",
-        2: "No se pudo determinar tu posición (revisá que el Servicio de Ubicación esté activado en tu SO).",
-        3: "Tardó demasiado en responder. Tocá 📍 para reintentar.",
+        1: "Permiso de ubicación bloqueado. Revisá los permisos del sitio en tu navegador y tocá ◎ de nuevo.",
+        2: "No se pudo determinar tu posición (revisá que el Servicio de Ubicación esté activado).",
+        3: "Tardó demasiado en responder. Tocá ◎ para reintentar.",
       };
       console.warn("Geolocation error:", err.code, err.message);
+      if (!state.map) onLocationReady(FALLBACK_LOCATION.lat, FALLBACK_LOCATION.lon, { fallback: true });
       setStatus(messages[err.code] || "No se pudo acceder a tu ubicación", "error");
-      onLocationReady(FALLBACK_LOCATION.lat, FALLBACK_LOCATION.lon, { fallback: true });
     },
     { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 }
   );
 }
 
-// Seguimiento CONTINUO de posicion (como Waze): actualiza tu marcador, deja
-// una estela de por donde pasaste, y si hay navegacion por voz activa hace
-// avanzar las indicaciones y sigue tu posicion en el mapa.
-//
-// iOS Safari tiene una limitacion conocida: despues de un rato corta en
-// silencio el watchPosition (sin disparar error), sobre todo si la app pasa
-// a segundo plano o la pantalla se atenua. Por eso ademas de arrancarlo,
-// hay un "vigia" que detecta cuando dejo de llegar posicion y lo reinicia solo.
+// Seguimiento CONTINUO de posicion (como Waze). iOS Safari corta en silencio
+// el watchPosition despues de un rato; hay un "vigia" que lo reinicia solo.
 const GPS_STALE_MS = 12000; // si no llega una posicion nueva en este tiempo, se considera "cortado"
 const GPS_ANNOUNCE_STALE_MS = 20000; // recien a partir de aca avisamos por voz
 
@@ -280,17 +356,15 @@ function startLiveTracking() {
   if (state.liveWatchId !== null || !navigator.geolocation) return;
 
   state.liveWatchId = navigator.geolocation.watchPosition(
-    (pos) => onLiveLocation(pos.coords.latitude, pos.coords.longitude),
+    (pos) => onLiveLocation(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy),
     (err) => {
       console.warn("Live tracking error:", err.code, err.message);
-      // Solo molestamos una vez por permiso bloqueado; los timeouts pasajeros
-      // en movimiento (tunel, mala señal) no ameritan interrumpir el viaje.
       if (err.code === 1 && !state.permissionErrorShown) {
         state.permissionErrorShown = true;
         setStatus("Se perdió el permiso de ubicación en tiempo real — revisalo en Ajustes", "error");
       }
     },
-    { enableHighAccuracy: true, maximumAge: 4000, timeout: 20000 }
+    { enableHighAccuracy: true, maximumAge: 3000, timeout: 20000 }
   );
 }
 
@@ -300,21 +374,20 @@ function restartLiveTracking() {
     state.liveWatchId = null;
   }
   startLiveTracking();
-  // Ademas de reiniciar el watch, pedimos una posicion puntual ya mismo: en
-  // iOS a veces el watch reiniciado tarda en dar la primera señal, y esto
-  // acorta esa espera.
   navigator.geolocation.getCurrentPosition(
-    (pos) => onLiveLocation(pos.coords.latitude, pos.coords.longitude),
+    (pos) => onLiveLocation(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy),
     () => {},
     { enableHighAccuracy: true, maximumAge: 4000, timeout: 15000 }
   );
 }
 
-function onLiveLocation(lat, lon) {
+function onLiveLocation(lat, lon, accuracy) {
   state.userLocation = { lat, lon };
+  state.userAccuracy = accuracy ?? null;
   state.lastFixAt = Date.now();
   state.gpsStaleAnnounced = false;
   updateGpsStatusBadge();
+  if (!state.map) return;
   placeUserMarker(lat, lon);
 
   if (!state.lastTrailPoint || haversineMeters(state.lastTrailPoint[0], state.lastTrailPoint[1], lat, lon) >= TRAIL_MIN_MOVE_METERS) {
@@ -323,25 +396,22 @@ function onLiveLocation(lat, lon) {
   }
 
   if (state.isNavigating) {
-    state.map.panTo([lat, lon], { animate: true });
+    if (Date.now() > (state.nav?.followPausedUntil || 0)) state.map.panTo([lat, lon], { animate: true });
     updateNavProgress(lat, lon);
   }
 }
 
-// Corre siempre en segundo plano revisando si el GPS "se corto". Si pasa
-// demasiado tiempo sin una posicion nueva, reinicia el watch solo y, si
-// estas navegando, te avisa por voz que esta buscando señal de nuevo.
 function updateGpsStatusBadge() {
   if (!el.gpsStatus) return;
   if (!state.lastFixAt) {
-    el.gpsStatus.textContent = "🛰️ Sin señal todavía";
-    el.gpsStatus.className = "gps-status warn";
+    el.gpsStatus.textContent = "Sin señal";
+    el.gpsStatus.className = "floating-pill gps-status warn";
     return;
   }
   const secs = Math.round((Date.now() - state.lastFixAt) / 1000);
   const stale = Date.now() - state.lastFixAt > GPS_STALE_MS;
-  el.gpsStatus.textContent = stale ? `🛰️ Sin señal hace ${secs}s` : `🛰️ En vivo (hace ${secs}s)`;
-  el.gpsStatus.className = `gps-status ${stale ? "warn" : "ok"}`;
+  el.gpsStatus.textContent = stale ? `Sin señal hace ${secs}s` : "GPS en vivo";
+  el.gpsStatus.className = `floating-pill gps-status ${stale ? "warn" : "ok"}`;
 }
 
 setInterval(() => {
@@ -349,85 +419,138 @@ setInterval(() => {
   if (!state.lastFixAt) return;
   const staleFor = Date.now() - state.lastFixAt;
 
-  if (staleFor > GPS_STALE_MS) {
-    restartLiveTracking();
-  }
+  if (staleFor > GPS_STALE_MS) restartLiveTracking();
   if (state.isNavigating && staleFor > GPS_ANNOUNCE_STALE_MS && !state.gpsStaleAnnounced) {
     state.gpsStaleAnnounced = true;
     speak("Buscando señal de GPS");
   }
 }, 4000);
 
-// Si el celular pasa a segundo plano y volves (cambiaste de app, se bloqueo
-// la pantalla), Safari puede haber matado el watch sin avisar: lo reiniciamos.
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") restartLiveTracking();
+  if (document.visibilityState === "visible") {
+    restartLiveTracking();
+    if (state.isNavigating) requestWakeLock(); // el wake lock se suelta al salir de la app
+  }
 });
 
-// --- Buscador de direcciones (Nominatim) para origen/destino ---
-function renderSuggestions(results, targetInput) {
-  if (!results.length) {
-    el.destSuggestions.classList.add("hidden");
+// ---------------------------------------------------------------------------
+// Buscador de destino: direccion libre, "Calle y Calle", o modo Esquina con
+// dos campos. Cada sugerencia es {icon, title, sub, lat, lon}.
+// ---------------------------------------------------------------------------
+function setDestModeUI(mode) {
+  state.destMode = mode;
+  el.modeBtns.forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
+  el.addressMode.classList.toggle("hidden", mode !== "address");
+  el.cornerMode.classList.toggle("hidden", mode !== "corner");
+  hideSuggestions();
+}
+el.modeBtns.forEach((btn) =>
+  btn.addEventListener("click", () => {
+    setDestModeUI(btn.dataset.mode);
+    state.destLocation = null;
+    (btn.dataset.mode === "corner" ? el.cornerStreetA : el.destInput).focus();
+  })
+);
+
+function hideSuggestions() {
+  el.destSuggestions.classList.add("hidden");
+  el.destSuggestions.innerHTML = "";
+}
+
+function renderSuggestions(items, targetInput, emptyMessage) {
+  if (!items.length) {
+    if (!emptyMessage) return hideSuggestions();
+    el.destSuggestions.innerHTML = `<div class="suggestion-empty">${escapeHtml(emptyMessage)}</div>`;
+    el.destSuggestions.classList.remove("hidden");
     return;
   }
   el.destSuggestions.classList.remove("hidden");
-  el.destSuggestions.innerHTML = results
-    .map((r, i) => `<div class="suggestion-item" data-idx="${i}">📍 ${r.display_name}</div>`)
+  el.destSuggestions.innerHTML = items
+    .map(
+      (r, i) => `<div class="suggestion-item" data-idx="${i}">
+        <span class="suggestion-icon">${r.icon}</span>
+        <div><div class="suggestion-title">${escapeHtml(r.title)}</div>${r.sub ? `<div class="suggestion-sub">${escapeHtml(r.sub)}</div>` : ""}</div>
+      </div>`
+    )
     .join("");
 
   el.destSuggestions.querySelectorAll(".suggestion-item").forEach((node) => {
     node.addEventListener("click", () => {
-      const r = results[Number(node.dataset.idx)];
-      const label = r.display_name.split(",").slice(0, 2).join(",");
-      const loc = { lat: parseFloat(r.lat), lon: parseFloat(r.lon) };
-
+      const r = items[Number(node.dataset.idx)];
+      const loc = { lat: r.lat, lon: r.lon };
       if (targetInput === el.originInput) {
         state.originLocation = loc;
-        el.originInput.value = label;
+        el.originInput.value = r.title;
       } else {
-        state.destLocation = loc;
-        el.destInput.value = label;
-        placeDestMarker(loc.lat, loc.lon);
-        state.map.panTo([loc.lat, loc.lon]);
-        loadNearbyPOIs(loc.lat, loc.lon);
+        if (targetInput === el.destInput) el.destInput.value = r.title;
+        setDestination(loc, r.title);
       }
-      el.destSuggestions.classList.add("hidden");
+      hideSuggestions();
     });
   });
+}
+
+function nominatimToSuggestion(r) {
+  const a = r.address || {};
+  const street = [a.road, a.house_number].filter(Boolean).join(" ");
+  const title = r.name && r.name !== a.road ? r.name : street || r.display_name.split(",")[0];
+  const sub = [r.name && street && r.name !== a.road ? street : "", a.suburb || a.neighbourhood || a.city_district].filter(Boolean).join(" · ");
+  return { icon: "📍", title, sub, lat: parseFloat(r.lat), lon: parseFloat(r.lon) };
+}
+
+function cornerToSuggestion(c) {
+  const sub = ["Esquina", c.barrio, c.distance != null ? `a ${formatDistance(c.distance)} de vos` : ""].filter(Boolean).join(" · ");
+  return { icon: "🔀", title: c.label, sub, lat: c.lat, lon: c.lon };
+}
+
+async function nominatimSearch(query, limit = 6) {
+  const url = `${NOMINATIM_URL}?format=json&addressdetails=1&limit=${limit}&countrycodes=uy&viewbox=${MONTEVIDEO_VIEWBOX}&bounded=1&q=${encodeURIComponent(`${query}, Montevideo`)}`;
+  const res = await fetch(url, { headers: { Accept: "application/json" } });
+  return res.ok ? await res.json() : [];
 }
 
 async function searchAddress(rawQuery, targetInput) {
   const token = ++state.addressSearchToken;
   const results = [];
+  const near = state.userLocation;
 
-  // Si el texto tiene forma de cruce ("Calle1 y Calle2"), buscamos el punto
-  // exacto por geometria real de calles (Nominatim no resuelve esquinas).
-  const intersectionParts = parseIntersectionQuery(rawQuery);
-  if (intersectionParts) {
-    try {
-      const point = await findStreetIntersection(intersectionParts[0], intersectionParts[1]);
-      if (point) {
-        results.push({
-          display_name: `🔀 Cruce: ${intersectionParts[0].trim()} y ${intersectionParts[1].trim()}`,
-          lat: point.lat,
-          lon: point.lon,
-        });
-      }
-    } catch {
-      /* si falla, seguimos con la busqueda normal igual */
-    }
+  // "Calle1 y Calle2": buscamos el punto exacto por geometria real de calles.
+  const parts = parseIntersectionQuery(rawQuery);
+  if (parts) {
+    const corners = await findCornersFromText(rawQuery, near);
+    results.push(...corners.map(cornerToSuggestion));
   }
+  if (token !== state.addressSearchToken) return;
 
   try {
-    const url = `${NOMINATIM_URL}?format=json&limit=5&countrycodes=uy&viewbox=${MONTEVIDEO_VIEWBOX}&bounded=1&q=${encodeURIComponent(`${rawQuery}, Montevideo, Uruguay`)}`;
-    const res = await fetch(url, { headers: { Accept: "application/json" } });
-    if (res.ok) results.push(...(await res.json()));
+    const data = await nominatimSearch(rawQuery);
+    results.push(...data.map(nominatimToSuggestion));
   } catch {
-    /* la busqueda de direcciones puede fallar sin romper un resultado de cruce ya encontrado */
+    /* la busqueda de direcciones puede fallar sin romper un cruce ya encontrado */
   }
 
   if (token !== state.addressSearchToken) return;
-  renderSuggestions(results, targetInput);
+  renderSuggestions(results, targetInput, parts ? "No encontré ese cruce. Revisá los nombres de las calles." : "Sin resultados");
+}
+
+async function searchCorner() {
+  const a = el.cornerStreetA.value.trim();
+  const b = el.cornerStreetB.value.trim();
+  state.destLocation = null;
+  if (a.length < 2 || b.length < 2) return hideSuggestions();
+
+  const token = ++state.addressSearchToken;
+  renderSuggestions([], el.cornerStreetB, "Buscando la esquina…");
+  const corners = await findStreetIntersections(a, b, state.userLocation).catch(() => []);
+  if (token !== state.addressSearchToken) return;
+
+  if (corners.length === 1) {
+    // Una sola esquina posible: la elegimos directo, sin hacerte tocar nada.
+    setDestination(corners[0], corners[0].label);
+    renderSuggestions([cornerToSuggestion(corners[0])], el.cornerStreetB);
+  } else {
+    renderSuggestions(corners.map(cornerToSuggestion), el.cornerStreetB, `No encontré el cruce de "${a}" y "${b}". Revisá los nombres.`);
+  }
 }
 
 let addressDebounce = null;
@@ -435,22 +558,42 @@ function wireAddressInput(inputEl) {
   inputEl.addEventListener("focus", () => (state.activeSuggestionInput = inputEl));
   inputEl.addEventListener("input", (e) => {
     state.activeSuggestionInput = inputEl;
-    // El texto ya no corresponde a la ubicacion elegida antes: la invalidamos
-    // para que "Calcular ruta" vuelva a resolverla en vez de usar la vieja.
+    // El texto ya no corresponde a la ubicacion elegida antes: la invalidamos.
     if (inputEl === el.originInput) state.originLocation = null;
     else state.destLocation = null;
+    if (inputEl === el.destInput) el.btnClearDest.classList.toggle("hidden", !inputEl.value);
 
     const q = e.target.value.trim();
     clearTimeout(addressDebounce);
-    if (q.length < 3) {
-      el.destSuggestions.classList.add("hidden");
-      return;
-    }
-    addressDebounce = setTimeout(() => searchAddress(q, inputEl), 400);
+    if (q.length < 3) return hideSuggestions();
+    addressDebounce = setTimeout(() => searchAddress(q, inputEl), 450);
   });
 }
 wireAddressInput(el.originInput);
 wireAddressInput(el.destInput);
+
+[el.cornerStreetA, el.cornerStreetB].forEach((input) => {
+  input.addEventListener("input", () => {
+    clearTimeout(addressDebounce);
+    addressDebounce = setTimeout(searchCorner, 600);
+  });
+});
+el.cornerStreetA.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") el.cornerStreetB.focus();
+});
+[el.destInput, el.cornerStreetB].forEach((i) =>
+  i.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") calculateRoute();
+  })
+);
+
+el.btnClearDest.addEventListener("click", () => {
+  el.destInput.value = "";
+  state.destLocation = null;
+  el.btnClearDest.classList.add("hidden");
+  hideSuggestions();
+  el.destInput.focus();
+});
 
 // --- Puntos de interes cerca del destino (Overpass / OpenStreetMap) ---
 function clearPoiMarkers() {
@@ -458,10 +601,6 @@ function clearPoiMarkers() {
   state.poiMarkers = [];
 }
 
-// Reintenta unas veces con espera creciente antes de darse por vencido: en
-// bici es comun perder señal un instante (entre antenas, tunel, etc.) y
-// antes esto fallaba en silencio, dando la sensacion de que los lugares
-// "desaparecian" del mapa sin ningun aviso.
 async function loadNearbyPOIs(lat, lon, attempt = 1) {
   clearPoiMarkers();
 
@@ -471,8 +610,8 @@ async function loadNearbyPOIs(lat, lon, attempt = 1) {
       const icon = L.divIcon({
         className: "",
         html: `<div class="poi-marker">${POI_CATEGORIES[p.category].icon}</div>`,
-        iconSize: [26, 26],
-        iconAnchor: [13, 13],
+        iconSize: [28, 28],
+        iconAnchor: [14, 14],
       });
       const marker = L.marker([p.lat, p.lon], { icon })
         .bindTooltip(p.name, { direction: "top", offset: [0, -12] })
@@ -482,11 +621,7 @@ async function loadNearbyPOIs(lat, lon, attempt = 1) {
     });
   } catch (e) {
     console.warn(`No se pudieron cargar los puntos de interés (intento ${attempt}):`, e.message);
-    if (attempt < 3) {
-      setTimeout(() => loadNearbyPOIs(lat, lon, attempt + 1), 3000 * attempt);
-    } else {
-      setStatus("No se pudieron cargar los lugares cercanos (sin señal/conexión) — probá tocar 📍 para reintentar", "error");
-    }
+    if (attempt < 3) setTimeout(() => loadNearbyPOIs(lat, lon, attempt + 1), 3000 * attempt);
   }
 }
 
@@ -508,7 +643,7 @@ async function toggleCycleways() {
       ways.map((w) =>
         L.polyline(
           w.geometry.map((p) => [p.lat, p.lon]),
-          { color: "#0ea5e9", weight: 4, opacity: 0.8, dashArray: "1 8", lineCap: "round" }
+          { color: "#1a73e8", weight: 4, opacity: 0.7, dashArray: "1 8", lineCap: "round" }
         )
       )
     ).addTo(state.map);
@@ -517,304 +652,562 @@ async function toggleCycleways() {
     el.btnToggleLanes.textContent = ways.length ? "🚴 Ciclovías" : "🚴 Sin datos acá";
   } catch {
     el.btnToggleLanes.textContent = "🚴 Ver ciclovías";
-    setStatus("No se pudieron cargar las ciclovías ahora — probá de nuevo", "error");
+    setStatus("No se pudieron cargar las ciclovías ahora — probá de nuevo", "error", { autoHideMs: 5000 });
   }
 }
 el.btnToggleLanes.addEventListener("click", toggleCycleways);
 
-// --- Ruteo (OpenRouteService) ---
+// ---------------------------------------------------------------------------
+// Ruteo (OpenRouteService)
+// ---------------------------------------------------------------------------
 function formatDuration(seconds) {
-  const min = Math.round(seconds / 60);
+  const min = Math.max(1, Math.round(seconds / 60));
   if (min < 60) return `${min} min`;
-  return `${Math.floor(min / 60)}h ${min % 60}min`;
+  return `${Math.floor(min / 60)} h ${min % 60} min`;
+}
+function formatDistance(m) {
+  return m >= 1000 ? `${(m / 1000).toFixed(1).replace(".", ",")} km` : `${Math.round(m / 10) * 10} m`;
+}
+function formatClock(date) {
+  return date.toLocaleTimeString("es-UY", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 }
 
-// Si el usuario escribio una direccion/esquina pero no toco ninguna sugerencia
-// de la lista, igual intentamos resolverla al tocar "Calcular ruta" (evita el
-// error confuso de "elegi un destino" cuando el texto ya alcanza para ubicarlo).
-async function resolveAddressText(text) {
-  const parts = parseIntersectionQuery(text);
-  if (parts) {
-    const point = await findStreetIntersection(parts[0], parts[1]).catch(() => null);
-    if (point) return point;
+// Si el usuario escribio algo pero no toco ninguna sugerencia, igual
+// intentamos resolverlo al tocar "Calcular ruta".
+async function resolveTypedDestination() {
+  if (state.destMode === "corner") {
+    const a = el.cornerStreetA.value.trim();
+    const b = el.cornerStreetB.value.trim();
+    if (!a || !b) return { error: "Completá las dos calles de la esquina" };
+    const c = await findStreetIntersection(a, b, state.userLocation).catch(() => null);
+    return c ? { loc: c, label: c.label } : { error: `No encontré la esquina de ${a} y ${b}` };
   }
-  try {
-    const url = `${NOMINATIM_URL}?format=json&limit=1&countrycodes=uy&viewbox=${MONTEVIDEO_VIEWBOX}&bounded=1&q=${encodeURIComponent(`${text}, Montevideo, Uruguay`)}`;
-    const res = await fetch(url, { headers: { Accept: "application/json" } });
-    if (res.ok) {
-      const data = await res.json();
-      if (data[0]) return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
-    }
-  } catch {
-    /* sin resultado */
+  const text = el.destInput.value.trim();
+  if (!text) return { error: "Escribí a dónde vas antes de calcular la ruta" };
+  if (parseIntersectionQuery(text)) {
+    const [c] = await findCornersFromText(text, state.userLocation);
+    if (c) return { loc: c, label: c.label };
   }
-  return null;
+  const data = await nominatimSearch(text, 1).catch(() => []);
+  if (data[0]) {
+    const s = nominatimToSuggestion(data[0]);
+    return { loc: s, label: s.title };
+  }
+  return { error: "No encontré esa dirección — probá elegir una de las sugerencias" };
 }
 
-async function calculateRoute() {
+async function fetchOrsRoute(origin, dest, key) {
+  const res = await fetch(`https://api.openrouteservice.org/v2/directions/${ORS_PROFILE}/geojson`, {
+    method: "POST",
+    headers: { Authorization: key, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      coordinates: [
+        [origin.lon, origin.lat],
+        [dest.lon, dest.lat],
+      ],
+      elevation: true,
+      language: "es", // sin esto, las instrucciones de voz vienen en ingles
+      instructions: true,
+    }),
+  });
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error(errBody?.error?.message || `Error ${res.status}`);
+  }
+  return res.json();
+}
+
+// Prepara la ruta para navegar: vertices, distancia acumulada y pasos.
+function buildRouteModel(geojson) {
+  const feature = geojson.features[0];
+  const vertices = feature.geometry.coordinates.map((c) => [c[1], c[0]]);
+  const cumDist = [0];
+  for (let i = 1; i < vertices.length; i++) {
+    cumDist.push(cumDist[i - 1] + haversineMeters(vertices[i - 1][0], vertices[i - 1][1], vertices[i][0], vertices[i][1]));
+  }
+  const steps = extractRouteSteps(geojson);
+  steps.forEach((s) => (s.cumDist = cumDist[s.vertexIndex] ?? 0));
+  return {
+    vertices,
+    cumDist,
+    total: cumDist[cumDist.length - 1],
+    duration: feature.properties.summary.duration,
+    steps,
+    coords3d: feature.geometry.coordinates,
+  };
+}
+
+// Linea de ruta estilo Waze: borde oscuro + linea verde encima, y lo ya
+// recorrido se va pintando en gris. Circulitos con flecha en cada giro.
+function drawRoute(route) {
+  clearRouteLayers();
+  const latlngs = route.vertices;
+  const casing = L.polyline(latlngs, { color: ROUTE_CASING, weight: 11, opacity: 0.95, lineCap: "round", lineJoin: "round" });
+  const line = L.polyline(latlngs, { color: ROUTE_COLOR, weight: 7, opacity: 1, lineCap: "round", lineJoin: "round" });
+  const done = L.polyline([], { color: ROUTE_DONE, weight: 7, opacity: 1, lineCap: "round", lineJoin: "round" });
+  const turns = L.layerGroup(
+    route.steps
+      .filter((s) => s.type !== 11 && s.type !== 10 && s.type !== 6)
+      .map((s) =>
+        L.marker([s.lat, s.lon], {
+          icon: L.divIcon({ className: "", html: `<div class="turn-marker">${maneuverOf(s).arrow}</div>`, iconSize: [20, 20] }),
+          interactive: false,
+        })
+      )
+  );
+  state.routeLayers = { casing, line, done, turns };
+  [casing, line, done, turns].forEach((l) => l.addTo(state.map));
+  state.userMarker?.setZIndexOffset(1000);
+}
+
+function clearRouteLayers() {
+  if (!state.routeLayers) return;
+  Object.values(state.routeLayers).forEach((l) => state.map.removeLayer(l));
+  state.routeLayers = null;
+}
+
+// "Por Julio César, Av. Italia y Bv. Artigas" — las calles donde mas se anda.
+function describeVia(steps) {
+  const byStreet = new Map();
+  steps.forEach((s, i) => {
+    if (!s.streetName) return;
+    const prev = byStreet.get(s.streetName) || { d: 0, first: i };
+    prev.d += s.distanceMeters || 0;
+    byStreet.set(s.streetName, prev);
+  });
+  const main = [...byStreet.entries()]
+    .filter(([, v]) => v.d >= 150)
+    .sort((a, b) => b[1].d - a[1].d)
+    .slice(0, 4)
+    .sort((a, b) => a[1].first - b[1].first)
+    .map(([name]) => name);
+  if (!main.length) return "";
+  const list = main.length > 1 ? `${main.slice(0, -1).join(", ")} y ${main[main.length - 1]}` : main[0];
+  return `Por ${list}`;
+}
+
+function renderStepList(steps, currentIndex = 0) {
+  el.stepList.innerHTML = steps
+    .map(
+      (s, i) => `<li class="${i < currentIndex ? "done" : ""}">
+        <span class="step-arrow">${maneuverOf(s).arrow}</span>
+        <span class="step-text">${escapeHtml(s.instruction)}</span>
+        ${s.distanceMeters > 0 && s.type !== 10 ? `<span class="step-dist">${formatDistance(s.distanceMeters)}</span>` : ""}
+      </li>`
+    )
+    .join("");
+}
+
+async function calculateRoute({ fromHere = false, reroute = false } = {}) {
   const key = getOrsKey();
   if (!key) {
     el.routeNoKey.classList.remove("hidden");
     el.routeResult.classList.add("hidden");
-    return;
+    setCardExpanded(true);
+    return false;
   }
-  const origin = state.originLocation || state.userLocation;
+  const origin = fromHere ? state.userLocation : state.originLocation || state.userLocation;
   if (!origin) {
     setStatus("No pude determinar tu ubicación de origen", "error");
-    return;
+    return false;
   }
 
   if (!state.destLocation) {
-    const typed = el.destInput.value.trim();
-    if (!typed) {
-      setStatus("Escribí a dónde vas antes de calcular la ruta", "error");
-      return;
-    }
     setStatus("Buscando esa dirección…");
-    const resolved = await resolveAddressText(typed);
-    if (!resolved) {
-      setStatus("No encontré esa dirección — probá elegir una de las sugerencias de la lista", "error");
-      return;
+    const r = await resolveTypedDestination();
+    if (r.error) {
+      setStatus(r.error, "error", { autoHideMs: 6000 });
+      return false;
     }
-    state.destLocation = resolved;
-    placeDestMarker(resolved.lat, resolved.lon);
-    loadNearbyPOIs(resolved.lat, resolved.lon);
+    setDestination(r.loc, r.label);
+    setStatus(null);
   }
 
-  el.btnCalcRoute.disabled = true;
-  el.btnCalcRoute.textContent = "Calculando…";
+  if (!reroute) {
+    el.btnCalcRoute.disabled = true;
+    el.btnCalcRoute.textContent = "Calculando…";
+  }
   el.routeNoKey.classList.add("hidden");
+  hideSuggestions();
 
   try {
-    const res = await fetch(`https://api.openrouteservice.org/v2/directions/${ORS_PROFILE}/geojson`, {
-      method: "POST",
-      headers: {
-        Authorization: key,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        coordinates: [
-          [origin.lon, origin.lat],
-          [state.destLocation.lon, state.destLocation.lat],
-        ],
-        elevation: true,
-        language: "es", // sin esto, las instrucciones de voz vienen en ingles
-      }),
-    });
+    const geojson = await fetchOrsRoute(origin, state.destLocation, key);
+    const route = buildRouteModel(geojson);
+    state.route = route;
+    drawRoute(route);
 
-    if (!res.ok) {
-      const errBody = await res.json().catch(() => ({}));
-      throw new Error(errBody?.error?.message || `Error ${res.status}`);
-    }
-    const geojson = await res.json();
+    if (reroute) return true; // en navegacion no tocamos la tarjeta ni la camara
 
-    if (state.routeLayer) state.map.removeLayer(state.routeLayer);
-    state.routeLayer = L.geoJSON(geojson, {
-      style: { color: "#16a34a", weight: 5, opacity: 0.85 },
-    }).addTo(state.map);
-
-    // Arranca una estela nueva y limpia para este viaje — si no, la de un
-    // viaje anterior (ej. la ida) quedaba superpuesta y confundia como si
-    // hubiera "varios recorridos" a la vez.
+    // Arranca una estela nueva y limpia para este viaje.
     state.trailLayer?.setLatLngs([]);
     state.lastTrailPoint = null;
 
-    setCardExpanded(false);
-    setTimeout(() => state.map.fitBounds(state.routeLayer.getBounds(), { padding: [40, 100] }), 320);
+    const etaDate = new Date(Date.now() + route.duration * 1000);
+    el.routeDistance.textContent = formatDistance(route.total);
+    el.routeDuration.textContent = formatDuration(route.duration);
+    el.routeEta.textContent = formatClock(etaDate);
+    el.routeVia.textContent = describeVia(route.steps);
 
-    const summary = geojson.features[0].properties.summary;
-    const now = new Date();
-    const etaDate = new Date(now.getTime() + summary.duration * 1000);
-
-    el.routeDistance.textContent = `${(summary.distance / 1000).toFixed(1)} km`;
-    el.routeDuration.textContent = formatDuration(summary.duration);
-    el.routeEta.textContent = etaDate.toLocaleTimeString("es-UY", { hour: "2-digit", minute: "2-digit" });
-
-    if (state.weather) {
-      const rainOnTrip = getRainProbabilityForWindow(state.weather, now, summary.duration);
-      el.routeRain.textContent = rainOnTrip !== null ? `${rainOnTrip}%` : "s/d";
-    } else {
-      el.routeRain.textContent = "s/d";
-    }
+    const rain = state.weather ? getRainProbabilityForWindow(state.weather, new Date(), route.duration) : null;
+    el.routeRain.textContent = rain != null ? `lluvia ${rain}%` : "lluvia s/d";
     updateDaylightNote(etaDate);
 
     if (state.weather?.windDirection != null) {
       const bearing = bearingDegrees(origin.lat, origin.lon, state.destLocation.lat, state.destLocation.lon);
       const wind = classifyWindRelative(state.weather.windDirection, bearing);
       el.routeWind.textContent = wind.text;
-      el.routeWind.className = `route-stat-value wind-${wind.level}`;
+      el.routeWind.className = `wind-${wind.level}`;
     } else {
-      el.routeWind.textContent = "s/d";
+      el.routeWind.textContent = "viento s/d";
     }
 
-    const elevationCoords = geojson.features[0].geometry.coordinates;
-    if (elevationCoords[0]?.length === 3) {
+    const c = route.coords3d;
+    if (c[0]?.length === 3) {
       let ascent = 0;
-      for (let i = 1; i < elevationCoords.length; i++) {
-        const diff = elevationCoords[i][2] - elevationCoords[i - 1][2];
-        if (diff > 0) ascent += diff;
-      }
+      for (let i = 1; i < c.length; i++) ascent += Math.max(0, c[i][2] - c[i - 1][2]);
       el.routeElevation.textContent = `+${Math.round(ascent)} m`;
     } else {
       el.routeElevation.textContent = "s/d";
     }
 
+    renderStepList(route.steps);
     el.routeResult.classList.remove("hidden");
+    stopNavigation({ silent: true });
 
-    stopVoiceNavigation();
-    state.navSteps = extractRouteSteps(geojson);
-    state.navIndex = 0;
+    const voiceOk = "speechSynthesis" in window;
+    el.voiceNavControls.classList.toggle("hidden", !voiceOk);
+    el.voiceNotSupported.classList.toggle("hidden", voiceOk);
 
-    // Distancia acumulada a lo largo de la ruta, punto a punto. La usamos
-    // para saber "cuanto llevas recorrido" comparando tu posicion contra el
-    // vertice mas cercano, en vez de exigir que pises un radio exacto (eso
-    // se podia trabar para siempre si el GPS no coincidia justo ahi).
-    state.routeVertices = geojson.features[0].geometry.coordinates.map((c) => [c[1], c[0]]);
-    state.routeCumDist = [0];
-    for (let i = 1; i < state.routeVertices.length; i++) {
-      const [lat1, lon1] = state.routeVertices[i - 1];
-      const [lat2, lon2] = state.routeVertices[i];
-      state.routeCumDist.push(state.routeCumDist[i - 1] + haversineMeters(lat1, lon1, lat2, lon2));
-    }
-    state.navSteps.forEach((s) => {
-      s.cumDist = state.routeCumDist[s.vertexIndex] ?? 0;
-      s.leadAnnounced = false;
-    });
-
-    if ("speechSynthesis" in window) {
-      el.voiceNotSupported.classList.add("hidden");
-      el.voiceNavControls.classList.remove("hidden");
-    } else {
-      el.voiceNavControls.classList.add("hidden");
-      el.voiceNotSupported.classList.remove("hidden");
-    }
+    // Vista previa tipo Waze: el mapa muestra el trayecto entero y abajo
+    // queda solo el resumen con "Iniciar". Tocando la manija se ven los pasos.
+    document.activeElement?.blur();
+    setSheetMode("preview");
+    setTimeout(() => {
+      state.map.invalidateSize();
+      state.map.fitBounds(state.routeLayers.casing.getBounds(), { padding: [40, 40] });
+      el.weatherCard.scrollTop = 0;
+    }, 320);
+    return true;
   } catch (e) {
-    setStatus(`No se pudo calcular la ruta: ${e.message}`, "error");
+    if (!reroute) setStatus(`No se pudo calcular la ruta: ${e.message}`, "error", { autoHideMs: 8000 });
+    return false;
   } finally {
-    el.btnCalcRoute.disabled = false;
-    el.btnCalcRoute.textContent = "Calcular ruta";
+    if (!reroute) {
+      el.btnCalcRoute.disabled = false;
+      el.btnCalcRoute.textContent = "Calcular ruta";
+    }
   }
 }
 
-// --- Navegacion por voz (turn-by-turn con GPS real) ---
-// En vez de exigir pisar un radio exacto alrededor del punto de giro (lo que
-// se podia trabar para siempre si el GPS pasaba de largo), medimos cuanto
-// llevas recorrido a lo largo de la ruta y avisamos con anticipacion.
-const NAV_LEAD_METERS = 120; // avisa "en N metros, doblar..." con esta anticipacion
-const NAV_ARRIVE_METERS = 20; // a partir de aca se da por hecha la maniobra
+// ---------------------------------------------------------------------------
+// Navegacion por voz tipo Waze.
+// - Te ubica SOBRE la ruta proyectando tu GPS en el tramo mas cercano
+//   (buscando cerca de donde ibas, asi no "salta" si la ruta pasa dos veces
+//   cerca del mismo lugar).
+// - Avisa cada giro 3 veces: con anticipacion (~400 m), cerca (~120 m) y
+//   "ahora". Despues de cada giro dice por donde seguir y cuanto.
+// - Si pasa un rato sin decir nada, te recuerda por donde vas y lo que viene.
+// - Si te salis de la ruta, avisa y recalcula solo desde donde estas.
+// ---------------------------------------------------------------------------
+const NAV_FAR_METERS = 400;
+const NAV_NEAR_METERS = 120;
+const NAV_NOW_METERS = 25;
+const NAV_REMINDER_MS = 40000; // silencio maximo antes de un recordatorio
+const OFF_ROUTE_METERS = 40;
+const OFF_ROUTE_FIXES = 3; // posiciones seguidas fuera de ruta antes de recalcular
+const REROUTE_COOLDOWN_MS = 15000;
+const ARRIVE_METERS = 25;
 
 async function requestWakeLock() {
   try {
     if ("wakeLock" in navigator) state.wakeLock = await navigator.wakeLock.request("screen");
   } catch {
-    state.wakeLock = null; // no critico: si falla, la navegacion sigue funcionando igual
+    state.wakeLock = null; // no critico
   }
 }
-
 function releaseWakeLock() {
   state.wakeLock?.release?.().catch(() => {});
   state.wakeLock = null;
 }
 
-function updateNavDisplay() {
-  const next = state.navSteps[state.navIndex];
-  el.voiceNextInstruction.textContent = next ? next.instruction : "Llegaste a tu destino 🎉";
-}
+// Proyecta (lat,lon) sobre la ruta. Devuelve { seg, traveled, offset }.
+function projectOnRoute(lat, lon, hintSeg) {
+  const v = state.route.vertices;
+  const cum = state.route.cumDist;
+  const kx = 111320 * Math.cos((lat * Math.PI) / 180);
+  const ky = 110540;
 
-function announceStep(index) {
-  const step = state.navSteps[index];
-  if (step) speak(step.instruction);
-}
-
-function finishNavigation() {
-  // El ultimo paso de ORS ya es la instruccion de llegada y se anuncio recien
-  // en el loop de updateNavProgress; aca solo cerramos el modo navegacion.
-  stopVoiceNavigation();
-}
-
-// Busca el vertice de la ruta mas cercano a tu posicion actual (recorriendo
-// TODA la ruta, no solo el proximo paso) para no quedar trabado si el GPS
-// dio un salto o cortaste camino: siempre se re-ubica sobre el progreso real.
-function nearestRouteVertexIndex(lat, lon) {
-  let bestIdx = 0;
-  let bestDist = Infinity;
-  for (let i = 0; i < state.routeVertices.length; i++) {
-    const [vlat, vlon] = state.routeVertices[i];
-    const d = haversineMeters(lat, lon, vlat, vlon);
-    if (d < bestDist) {
-      bestDist = d;
-      bestIdx = i;
+  const scan = (from, to) => {
+    let best = null;
+    for (let i = Math.max(0, from); i < Math.min(v.length - 1, to); i++) {
+      const ax = (v[i][1] - lon) * kx, ay = (v[i][0] - lat) * ky;
+      const bx = (v[i + 1][1] - lon) * kx, by = (v[i + 1][0] - lat) * ky;
+      const dx = bx - ax, dy = by - ay;
+      const len2 = dx * dx + dy * dy;
+      const t = len2 ? Math.min(1, Math.max(0, -(ax * dx + ay * dy) / len2)) : 0;
+      const px = ax + t * dx, py = ay + t * dy;
+      const d = Math.hypot(px, py);
+      if (!best || d < best.offset) best = { seg: i, t, offset: d, traveled: cum[i] + t * (cum[i + 1] - cum[i]) };
     }
+    return best;
+  };
+
+  // Primero cerca de donde ibas (un poco para atras y bastante para adelante).
+  let best = hintSeg != null ? scan(hintSeg - 5, hintSeg + 120) : null;
+  if (!best || best.offset > OFF_ROUTE_METERS) {
+    const global = scan(0, v.length);
+    if (!best || global.offset < best.offset) best = global;
   }
-  return bestIdx;
+  return best;
+}
+
+function startNavigation() {
+  if (!state.route?.steps.length) {
+    setStatus("Primero calculá una ruta para poder navegar", "error", { autoHideMs: 5000 });
+    return;
+  }
+  unlockSpeech();
+
+  state.isNavigating = true;
+  window.__mibiciNavigating = true;
+  state.nav = {
+    index: 1, // el paso 0 es "arrancá"; el siguiente es la primera maniobra
+    seg: 0,
+    traveled: 0,
+    offRouteCount: 0,
+    lastRerouteAt: 0,
+    rerouting: false,
+    followPausedUntil: 0,
+  };
+  resetStepFlags();
+
+  el.app.classList.add("navigating");
+  el.navBanner.classList.remove("hidden");
+  el.navFooter.classList.remove("hidden");
+  requestWakeLock();
+  startLiveTracking();
+
+  setTimeout(() => {
+    state.map.invalidateSize();
+    const here = state.userLocation || { lat: state.route.vertices[0][0], lon: state.route.vertices[0][1] };
+    state.map.setView([here.lat, here.lon], 17);
+  }, 50);
+
+  const first = state.route.steps[0];
+  const eta = formatClock(new Date(Date.now() + state.route.duration * 1000));
+  speak(
+    `Arrancamos. ${first.streetName ? `Salí por ${first.streetName}.` : first.instruction + "."} ` +
+      `Son ${spokenDistance(state.route.total)}, llegás a las ${eta}`,
+    "high"
+  );
+  if (state.userLocation) updateNavProgress(state.userLocation.lat, state.userLocation.lon);
+  else renderNavBanner(state.route.steps[1]?.cumDist ?? 0);
+}
+
+function resetStepFlags() {
+  state.route.steps.forEach((s) => {
+    s.saidFar = s.saidNear = s.saidNow = false;
+  });
+}
+
+function stopNavigation({ silent } = {}) {
+  const wasNavigating = state.isNavigating;
+  state.isNavigating = false;
+  window.__mibiciNavigating = false;
+  state.nav = null;
+  releaseWakeLock();
+  if ("speechSynthesis" in window) speechSynthesis.cancel();
+  el.app.classList.remove("navigating");
+  el.navBanner.classList.add("hidden");
+  el.navFooter.classList.add("hidden");
+  if (wasNavigating && !silent) {
+    setSheetMode("preview");
+    setTimeout(() => state.map.invalidateSize(), 50);
+    if (state.route) renderStepList(state.route.steps);
+  }
+}
+
+function renderNavBanner(distToNext) {
+  const steps = state.route.steps;
+  const next = steps[state.nav.index];
+  if (!next) return;
+  const m = maneuverOf(next);
+  el.navArrow.textContent = m.arrow;
+  el.navDistance.textContent = next.type === 10 ? formatDistance(distToNext) : formatDistance(distToNext);
+  el.navInstruction.textContent = next.instruction;
+
+  const after = steps[state.nav.index + 1];
+  if (after && after.type !== 10 && after.cumDist - next.cumDist < 150) {
+    el.navThen.textContent = `Enseguida: ${maneuverOf(after).arrow} ${after.instruction}`;
+    el.navThen.classList.remove("hidden");
+  } else {
+    el.navThen.classList.add("hidden");
+  }
+
+  const remaining = Math.max(0, state.route.total - state.nav.traveled);
+  const remainingSecs = state.route.duration * (remaining / state.route.total || 0);
+  el.navRemainingDist.textContent = (remaining / 1000).toFixed(1).replace(".", ",");
+  el.navRemainingTime.textContent = formatDuration(remainingSecs);
+  el.navEta.textContent = formatClock(new Date(Date.now() + remainingSecs * 1000));
+}
+
+// Arma la frase para el proximo giro, encadenando el siguiente si viene pegado.
+function maneuverPhrase(step) {
+  let phrase = spokenManeuver(step);
+  const steps = state.route.steps;
+  const idx = steps.indexOf(step);
+  const after = steps[idx + 1];
+  if (after && after.type !== 10 && after.cumDist - step.cumDist < 60) {
+    phrase += `, y enseguida ${spokenManeuver(after)}`;
+  }
+  return phrase;
 }
 
 function updateNavProgress(lat, lon) {
-  if (!state.routeVertices?.length) return;
+  const nav = state.nav;
+  if (!nav || !state.route || nav.arrived) return;
 
-  const traveled = state.routeCumDist[nearestRouteVertexIndex(lat, lon)];
+  const p = projectOnRoute(lat, lon, nav.seg);
+  const accuracyOk = state.userAccuracy == null || state.userAccuracy < 45;
 
-  while (state.navIndex < state.navSteps.length) {
-    const step = state.navSteps[state.navIndex];
-    const remaining = step.cumDist - traveled;
+  // --- Fuera de ruta -> recalcular ---
+  if (p.offset > OFF_ROUTE_METERS && accuracyOk) {
+    nav.offRouteCount++;
+    if (nav.offRouteCount >= OFF_ROUTE_FIXES) rerouteFrom(lat, lon);
+    return;
+  }
+  nav.offRouteCount = 0;
 
-    if (remaining <= NAV_ARRIVE_METERS) {
-      announceStep(state.navIndex);
-      state.navIndex++;
-      continue;
+  // No dejamos que el progreso retroceda por ruido del GPS.
+  nav.seg = p.seg;
+  nav.traveled = Math.max(nav.traveled - 15, p.traveled);
+  const traveled = nav.traveled;
+
+  // Tramo ya recorrido en gris.
+  const v = state.route.vertices;
+  const doneLatLngs = v.slice(0, p.seg + 1);
+  const a = v[p.seg], b = v[p.seg + 1] || a;
+  doneLatLngs.push([a[0] + (b[0] - a[0]) * p.t, a[1] + (b[1] - a[1]) * p.t]);
+  state.routeLayers?.done.setLatLngs(doneLatLngs);
+
+  // --- Llegada ---
+  if (state.route.total - traveled <= ARRIVE_METERS) {
+    arrive();
+    return;
+  }
+
+  const steps = state.route.steps;
+  // Maniobras que ya quedaron atras (por si el GPS salteo alguna).
+  while (nav.index < steps.length - 1 && steps[nav.index].cumDist - traveled < -NAV_NOW_METERS) {
+    nav.index++;
+    afterManeuver(steps[nav.index - 1]);
+  }
+
+  const next = steps[nav.index];
+  const dist = next.cumDist - traveled;
+
+  if (next.type === 10) {
+    if (!next.saidNear && dist <= 150) {
+      next.saidNear = true;
+      speak(`Tu destino está a ${spokenDistance(dist)}${state.destLabel ? `, en ${state.destLabel}` : ""}`, "normal");
     }
-    if (!step.leadAnnounced && remaining <= NAV_LEAD_METERS) {
-      speak(`En ${Math.round(remaining / 10) * 10} metros, ${step.instruction}`);
-      step.leadAnnounced = true;
+  } else if (dist <= NAV_NOW_METERS) {
+    if (!next.saidNow) {
+      next.saidNow = next.saidNear = next.saidFar = true;
+      speak(`Ahora, ${maneuverPhrase(next)}`, "high");
     }
-    break;
+    // Pasamos a la siguiente maniobra cuando ya la dejamos atras.
+    if (dist < -5) {
+      nav.index++;
+      afterManeuver(next);
+    }
+  } else if (dist <= NAV_NEAR_METERS && !next.saidNear) {
+    next.saidNear = next.saidFar = true;
+    speak(`En ${spokenDistance(dist)}, ${maneuverPhrase(next)}`, "high");
+  } else if (dist <= NAV_FAR_METERS && dist > NAV_NEAR_METERS + 80 && !next.saidFar) {
+    next.saidFar = true;
+    speak(`En ${spokenDistance(dist)}, ${maneuverPhrase(next)}`, "normal");
+  } else if (Date.now() - voiceState.lastSpokeAt > NAV_REMINDER_MS) {
+    // Recordatorio para que la voz te acompañe todo el viaje.
+    const current = steps[nav.index - 1];
+    const along = current?.streetName ? `Seguí por ${current.streetName}. ` : "Seguí derecho. ";
+    speak(`${along}En ${spokenDistance(dist)}, ${spokenManeuver(next)}.`, "low");
   }
 
-  if (state.navIndex >= state.navSteps.length) {
-    finishNavigation();
-    return;
-  }
-
-  updateNavDisplay();
-  const remainingToNext = Math.max(0, Math.round(state.navSteps[state.navIndex].cumDist - traveled));
-  el.voiceNextDistance.textContent = `en ${remainingToNext} m`;
+  renderNavBanner(Math.max(0, steps[nav.index].cumDist - traveled));
 }
 
-function startVoiceNavigation() {
-  if (!state.navSteps.length) {
-    setStatus("Primero calculá una ruta para poder navegar por voz", "error");
-    return;
+// Justo despues de un giro: "Seguí por Av. Italia 800 metros".
+function afterManeuver(doneStep) {
+  const steps = state.route.steps;
+  const nextStep = steps[state.nav.index];
+  if (!nextStep) return;
+  const stretch = nextStep.cumDist - doneStep.cumDist;
+  if (stretch > 250 && doneStep.streetName) {
+    // Se encola detras del "Ahora, doblá..." (prioridad normal no lo corta).
+    speak(`Seguí por ${doneStep.streetName} ${spokenDistance(stretch)}`, "normal");
+    // Si el proximo giro esta cerca, el aviso "en 400 metros" seria repetido.
+    if (stretch <= 600) nextStep.saidFar = true;
   }
-  if (!("speechSynthesis" in window)) {
-    setStatus("Tu navegador no soporta indicaciones por voz", "error");
-    return;
-  }
-
-  state.isNavigating = true;
-  el.voiceNavControls.classList.add("hidden");
-  el.voiceNavActive.classList.remove("hidden");
-  requestWakeLock();
-  startLiveTracking(); // por si todavia no habia arrancado (ej. veniamos del fallback)
-
-  state.navSteps.forEach((s) => (s.leadAnnounced = false));
-  announceStep(0);
-  state.navIndex = 1;
-  updateNavDisplay();
-  el.voiceNextDistance.textContent = "";
+  renderStepList(steps, state.nav.index);
 }
 
-function stopVoiceNavigation() {
-  // El seguimiento en vivo (marcador + estela) sigue corriendo siempre; solo
-  // apagamos el modo navegacion (anuncios de voz + camara siguiendote).
-  state.isNavigating = false;
-  releaseWakeLock();
-  if ("speechSynthesis" in window) speechSynthesis.cancel();
-  el.voiceNavActive.classList.add("hidden");
-  if (state.navSteps.length) el.voiceNavControls.classList.remove("hidden");
+async function rerouteFrom(lat, lon) {
+  const nav = state.nav;
+  if (nav.rerouting || Date.now() - nav.lastRerouteAt < REROUTE_COOLDOWN_MS) return;
+  nav.rerouting = true;
+  nav.lastRerouteAt = Date.now();
+  speak("Te saliste de la ruta. Recalculando.", "high");
+  el.navInstruction.textContent = "Recalculando ruta…";
+  el.navDistance.textContent = "";
+  el.navArrow.textContent = "⟲";
+
+  state.userLocation = { lat, lon };
+  const ok = await calculateRoute({ fromHere: true, reroute: true });
+  if (!state.nav) return; // cancelaste mientras recalculaba
+  nav.rerouting = false;
+  nav.offRouteCount = 0;
+  if (!ok) {
+    speak("No pude recalcular, sin conexión. Sigo intentando.", "normal");
+    return;
+  }
+  nav.index = 1;
+  nav.seg = 0;
+  nav.traveled = 0;
+  resetStepFlags();
+  renderStepList(state.route.steps, 1);
+  const next = state.route.steps[1];
+  const first = state.route.steps[0];
+  speak(
+    `Ruta nueva. ${first.streetName ? `Seguí por ${first.streetName}, ` : ""}` +
+      (next ? `en ${spokenDistance(next.cumDist)}, ${spokenManeuver(next)}.` : ""),
+    "normal"
+  );
+  updateNavProgress(lat, lon);
 }
 
-el.btnStartNav.addEventListener("click", startVoiceNavigation);
-el.btnStopNav.addEventListener("click", stopVoiceNavigation);
+function arrive() {
+  state.nav.arrived = true;
+  speak(`Llegaste a tu destino${state.destLabel ? `: ${state.destLabel}` : ""}. ¡Buen viaje!`, "high");
+  el.navArrow.textContent = "⚑";
+  el.navDistance.textContent = "Llegaste";
+  el.navInstruction.textContent = state.destLabel || "Tu destino";
+  el.navThen.classList.add("hidden");
+  state.routeLayers?.done.setLatLngs(state.route.vertices);
+  state.nav.index = state.route.steps.length;
+  const nav = state.nav;
+  setTimeout(() => {
+    if (state.nav === nav) stopNavigation();
+  }, 8000);
+}
+
+el.btnStartNav.addEventListener("click", startNavigation);
+el.btnStopNav.addEventListener("click", () => stopNavigation());
+el.btnMute.addEventListener("click", () => {
+  voiceState.muted = !voiceState.muted;
+  el.btnMute.textContent = voiceState.muted ? "🔇" : "🔊";
+  if (voiceState.muted) speechSynthesis.cancel();
+});
 
 // --- Selector de vehiculo ---
 el.vehicleBtns.forEach((btn) => {
@@ -847,20 +1240,18 @@ el.btnSaveKey.addEventListener("click", () => {
 });
 
 el.btnLocate.addEventListener("click", () => {
-  requestGeolocation();
-  if (state.destLocation) loadNearbyPOIs(state.destLocation.lat, state.destLocation.lon);
+  if (state.nav) state.nav.followPausedUntil = 0;
+  if (state.userLocation && state.map) state.map.setView([state.userLocation.lat, state.userLocation.lon], state.isNavigating ? 17 : 16);
+  if (!state.isNavigating) requestGeolocation();
 });
-el.btnCalcRoute.addEventListener("click", calculateRoute);
+el.btnCalcRoute.addEventListener("click", () => calculateRoute());
 
 document.addEventListener("click", (e) => {
-  if (!e.target.closest(".route-field")) el.destSuggestions.classList.add("hidden");
+  if (!e.target.closest(".route-form")) hideSuggestions();
 });
 
 if (!getOrsKey()) el.routeNoKey.classList.remove("hidden");
 
-// Los cortes de señal andando en bici son el motivo mas comun de que el
-// clima, el mapa, los lugares cercanos o la ruta parezcan "fallar" sin
-// explicacion — avisamos claramente cuando pasa, en vez de fallar en silencio.
 window.addEventListener("offline", () => setStatus("📶 Sin conexión — el mapa, el clima y las rutas necesitan internet", "error"));
 window.addEventListener("online", () => {
   setStatus(null);

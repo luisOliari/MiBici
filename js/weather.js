@@ -57,7 +57,7 @@ async function fetchWeather(lat, lon) {
     rainProb = idx >= 0 ? hourlyRainProb[idx] : hourlyRainProb[0];
   }
 
-  const fmtHour = (iso) => (iso ? new Date(iso).toLocaleTimeString("es-UY", { hour: "2-digit", minute: "2-digit" }) : null);
+  const fmtHour = (iso) => (iso ? new Date(iso).toLocaleTimeString("es-UY", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }) : null);
 
   return {
     temperature: data.current.temperature_2m,
