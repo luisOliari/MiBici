@@ -31,10 +31,9 @@ function cleanStreetName(name) {
   return name && name !== "-" ? name : "";
 }
 
-// Convierte la respuesta GeoJSON de ORS en una lista simple de pasos con la
+// Convierte una ruta (feature GeoJSON de ORS) en una lista simple de pasos con la
 // coordenada real (lat/lon) donde corresponde disparar cada indicacion.
-function extractRouteSteps(geojson) {
-  const feature = geojson.features[0];
+function extractRouteSteps(feature) {
   const coords = feature.geometry.coordinates; // [ [lon,lat], ... ]
   const steps = feature.properties.segments.flatMap((seg) => seg.steps);
 

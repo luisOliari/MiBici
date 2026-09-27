@@ -20,7 +20,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
 <link rel="stylesheet" href="vendor/leaflet.css" />
-<link rel="stylesheet" href="css/style.css?v=2026.09.27-2" />
+<link rel="stylesheet" href="css/style.css?v=2026.09.27-3" />
 </head>
 <body>
   <div id="app">
@@ -109,6 +109,7 @@
       </div>
 
       <div id="routeResult" class="route-result hidden">
+        <div id="routeOptions" class="route-options hidden"></div>
         <div class="route-headline">
           <span id="routeDuration" class="route-big">—</span>
           <span id="routeDistance" class="route-sub">—</span>
@@ -134,7 +135,7 @@
           <ol id="stepList" class="step-list"></ol>
         </details>
 
-        <p class="route-note">Ruta tranquila para bici/monopatín: prioriza ciclovías y evita avenidas. No refleja tránsito vehicular en vivo.</p>
+        <p class="route-note">Rutas para bici/monopatín: priorizan ciclovías y calles tranquilas. El tránsito es una estimación según cuánto del recorrido va por avenidas o rutas con muchos autos (no hay datos públicos de tránsito en vivo para Montevideo). Tocá una opción o una línea gris del mapa para elegirla.</p>
       </div>
 
       <div id="routeNoKey" class="route-nokey hidden">
@@ -194,19 +195,19 @@
   </div>
 
   <script src="vendor/leaflet.js"></script>
-  <script src="js/weather.js?v=2026.09.27-2"></script>
-  <script src="js/poi.js?v=2026.09.27-2"></script>
-  <script src="js/bikelanes.js?v=2026.09.27-2"></script>
-  <script src="js/intersection.js?v=2026.09.27-2"></script>
-  <script src="js/voice.js?v=2026.09.27-2"></script>
-  <script src="js/app.js?v=2026.09.27-2"></script>
+  <script src="js/weather.js?v=2026.09.27-3"></script>
+  <script src="js/poi.js?v=2026.09.27-3"></script>
+  <script src="js/bikelanes.js?v=2026.09.27-3"></script>
+  <script src="js/intersection.js?v=2026.09.27-3"></script>
+  <script src="js/voice.js?v=2026.09.27-3"></script>
+  <script src="js/app.js?v=2026.09.27-3"></script>
   <script>
     // --- Actualizacion garantizada ---------------------------------------
     // iPhone (sobre todo con la app en la pantalla de inicio) puede quedarse
     // con archivos viejos guardados. Al abrir y al volver a la app,
     // comparamos esta version con version.json del servidor; si hay una
     // nueva, borramos todo lo guardado y recargamos.
-    const APP_VERSION = "2026.09.27-2";
+    const APP_VERSION = "2026.09.27-3";
     document.getElementById("appVersion").textContent = APP_VERSION;
 
     async function hardRefresh() {

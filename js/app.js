@@ -100,6 +100,7 @@ const el = {
   routeWind: $("routeWind"),
   routeElevation: $("routeElevation"),
   stepList: $("stepList"),
+  routeOptions: $("routeOptions"),
   routeNoKey: $("routeNoKey"),
   btnToggleLanes: $("btnToggleLanes"),
   gpsStatus: $("gpsStatus"),
@@ -696,51 +697,118 @@ async function resolveTypedDestination() {
   return { error: "No encontré esa dirección — probá elegir una de las sugerencias" };
 }
 
-async function fetchOrsRoute(origin, dest, key) {
+async function fetchOrsRoute(origin, dest, key, { alternatives = false } = {}) {
+  const body = {
+    coordinates: [
+      [origin.lon, origin.lat],
+      [dest.lon, dest.lat],
+    ],
+    elevation: true,
+    language: "es", // sin esto, las instrucciones de voz vienen en ingles
+    instructions: true,
+    extra_info: ["waytype"], // por que tipo de calle va cada tramo (para estimar transito)
+  };
+  // Hasta 3 opciones distintas (que compartan como mucho 60% del recorrido y
+  // no sean mas de 60% mas largas que la mejor).
+  if (alternatives) body.alternative_routes = { target_count: 3, share_factor: 0.6, weight_factor: 1.6 };
+
   const res = await fetch(`https://api.openrouteservice.org/v2/directions/${ORS_PROFILE}/geojson`, {
     method: "POST",
     headers: { Authorization: key, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      coordinates: [
-        [origin.lon, origin.lat],
-        [dest.lon, dest.lat],
-      ],
-      elevation: true,
-      language: "es", // sin esto, las instrucciones de voz vienen en ingles
-      instructions: true,
-    }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const errBody = await res.json().catch(() => ({}));
+    // Las alternativas tienen limites (ej. viajes muy largos): si falla, pedimos una sola.
+    if (alternatives) return fetchOrsRoute(origin, dest, key);
     throw new Error(errBody?.error?.message || `Error ${res.status}`);
   }
   return res.json();
 }
 
+// Tipos de calle de ORS (extra_info waytype): 1 ruta nacional, 2 avenida/calle
+// principal, 3 calle comun, 4 sendero, 5 camino rural, 6 ciclovia, 7 peatonal...
+const WAYTYPE_BUSY = new Set([1, 2]);
+const WAYTYPE_CYCLEWAY = 6;
+
+// No hay datos publicos de transito EN VIVO para Montevideo, asi que lo
+// estimamos por el tipo de calle: cuanto del recorrido va por avenidas o
+// rutas (mucho auto) vs calles comunes y ciclovias (tranquilo).
+function trafficStats(feature) {
+  const summary = feature.properties.extras?.waytypes?.summary || [];
+  let busy = 0, cycleway = 0;
+  summary.forEach((s) => {
+    if (WAYTYPE_BUSY.has(s.value)) busy += s.amount;
+    if (s.value === WAYTYPE_CYCLEWAY) cycleway += s.amount;
+  });
+  const busyShare = summary.length ? busy / 100 : null;
+  const level = busyShare == null ? "sd" : busyShare < 0.15 ? "bajo" : busyShare < 0.4 ? "medio" : "alto";
+  return { busyShare, cyclewayShare: cycleway / 100, level };
+}
+
 // Prepara la ruta para navegar: vertices, distancia acumulada y pasos.
-function buildRouteModel(geojson) {
-  const feature = geojson.features[0];
+function buildRouteModel(feature) {
   const vertices = feature.geometry.coordinates.map((c) => [c[1], c[0]]);
   const cumDist = [0];
   for (let i = 1; i < vertices.length; i++) {
     cumDist.push(cumDist[i - 1] + haversineMeters(vertices[i - 1][0], vertices[i - 1][1], vertices[i][0], vertices[i][1]));
   }
-  const steps = extractRouteSteps(geojson);
+  const steps = extractRouteSteps(feature);
   steps.forEach((s) => (s.cumDist = cumDist[s.vertexIndex] ?? 0));
+  const c = feature.geometry.coordinates;
+  let ascent = null;
+  if (c[0]?.length === 3) {
+    ascent = 0;
+    for (let i = 1; i < c.length; i++) ascent += Math.max(0, c[i][2] - c[i - 1][2]);
+  }
   return {
     vertices,
     cumDist,
     total: cumDist[cumDist.length - 1],
     duration: feature.properties.summary.duration,
     steps,
-    coords3d: feature.geometry.coordinates,
+    ascent,
+    traffic: trafficStats(feature),
+    tags: [],
   };
+}
+
+// Etiquetas de cada opcion y cual recomendamos: la que mejor combina tiempo
+// y tranquilidad (cada 10% del recorrido por avenidas "cuesta" como 8% mas de tiempo).
+function rankRoutes(routes) {
+  const cost = (r) => r.duration * (1 + 0.8 * (r.traffic.busyShare ?? 0));
+  const minBy = (f) => routes.reduce((best, r) => (f(r) < f(best) ? r : best), routes[0]);
+  const recommended = minBy(cost);
+  const fastest = minBy((r) => r.duration);
+  const calmest = minBy((r) => r.traffic.busyShare ?? 1);
+  const flattest = minBy((r) => r.ascent ?? 0);
+  routes.forEach((r) => {
+    r.tags = [];
+    if (routes.length < 2) return;
+    if (r === recommended) r.tags.push("Recomendada");
+    if (r === fastest) r.tags.push("Más rápida");
+    if (r === calmest && r.traffic.busyShare != null) r.tags.push("Menos tránsito");
+    if (r === flattest && r.ascent != null && r !== fastest) r.tags.push("Menos subida");
+  });
+  return routes.indexOf(recommended);
 }
 
 // Linea de ruta estilo Waze: borde oscuro + linea verde encima, y lo ya
 // recorrido se va pintando en gris. Circulitos con flecha en cada giro.
 function drawRoute(route) {
   clearRouteLayers();
+  // Las otras opciones en gris debajo; tocandolas se eligen.
+  const alts = L.layerGroup(
+    (state.routes || [])
+      .filter((r) => r !== route && !state.isNavigating)
+      .map((r) =>
+        L.polyline(r.vertices, { color: "#8a8a8a", weight: 8, opacity: 0.75, lineCap: "round", lineJoin: "round" }).on("click", (e) => {
+          L.DomEvent.stopPropagation(e);
+          selectRoute(state.routes.indexOf(r));
+        })
+      )
+  );
+  alts.addTo(state.map);
   const latlngs = route.vertices;
   const casing = L.polyline(latlngs, { color: ROUTE_CASING, weight: 11, opacity: 0.95, lineCap: "round", lineJoin: "round" });
   const line = L.polyline(latlngs, { color: ROUTE_COLOR, weight: 7, opacity: 1, lineCap: "round", lineJoin: "round" });
@@ -755,7 +823,7 @@ function drawRoute(route) {
         })
       )
   );
-  state.routeLayers = { casing, line, done, turns };
+  state.routeLayers = { alts, casing, line, done, turns };
   [casing, line, done, turns].forEach((l) => l.addTo(state.map));
   state.userMarker?.setZIndexOffset(1000);
 }
@@ -831,60 +899,38 @@ async function calculateRoute({ fromHere = false, reroute = false } = {}) {
   hideSuggestions();
 
   try {
-    const geojson = await fetchOrsRoute(origin, state.destLocation, key);
-    const route = buildRouteModel(geojson);
-    state.route = route;
-    drawRoute(route);
+    const geojson = await fetchOrsRoute(origin, state.destLocation, key, { alternatives: !reroute });
+    const routes = geojson.features.map(buildRouteModel);
+    const best = rankRoutes(routes);
+    state.routes = routes;
+    state.routeOrigin = origin;
 
-    if (reroute) return true; // en navegacion no tocamos la tarjeta ni la camara
+    if (reroute) {
+      state.route = routes[0];
+      drawRoute(routes[0]);
+      return true; // en navegacion no tocamos la tarjeta ni la camara
+    }
 
     // Arranca una estela nueva y limpia para este viaje.
     state.trailLayer?.setLatLngs([]);
     state.lastTrailPoint = null;
 
-    const etaDate = new Date(Date.now() + route.duration * 1000);
-    el.routeDistance.textContent = formatDistance(route.total);
-    el.routeDuration.textContent = formatDuration(route.duration);
-    el.routeEta.textContent = formatClock(etaDate);
-    el.routeVia.textContent = describeVia(route.steps);
-
-    const rain = state.weather ? getRainProbabilityForWindow(state.weather, new Date(), route.duration) : null;
-    el.routeRain.textContent = rain != null ? `lluvia ${rain}%` : "lluvia s/d";
-    updateDaylightNote(etaDate);
-
-    if (state.weather?.windDirection != null) {
-      const bearing = bearingDegrees(origin.lat, origin.lon, state.destLocation.lat, state.destLocation.lon);
-      const wind = classifyWindRelative(state.weather.windDirection, bearing);
-      el.routeWind.textContent = wind.text;
-      el.routeWind.className = `wind-${wind.level}`;
-    } else {
-      el.routeWind.textContent = "viento s/d";
-    }
-
-    const c = route.coords3d;
-    if (c[0]?.length === 3) {
-      let ascent = 0;
-      for (let i = 1; i < c.length; i++) ascent += Math.max(0, c[i][2] - c[i - 1][2]);
-      el.routeElevation.textContent = `+${Math.round(ascent)} m`;
-    } else {
-      el.routeElevation.textContent = "s/d";
-    }
-
-    renderStepList(route.steps);
-    el.routeResult.classList.remove("hidden");
     stopNavigation({ silent: true });
+    selectRoute(best);
+    el.routeResult.classList.remove("hidden");
 
     const voiceOk = "speechSynthesis" in window;
     el.voiceNavControls.classList.toggle("hidden", !voiceOk);
     el.voiceNotSupported.classList.toggle("hidden", voiceOk);
 
-    // Vista previa tipo Waze: el mapa muestra el trayecto entero y abajo
-    // queda solo el resumen con "Iniciar". Tocando la manija se ven los pasos.
+    // Vista previa tipo Waze: el mapa muestra todas las opciones y abajo
+    // quedan las tarjetas para elegir + "Iniciar".
     document.activeElement?.blur();
     setSheetMode("preview");
     setTimeout(() => {
       state.map.invalidateSize();
-      state.map.fitBounds(state.routeLayers.casing.getBounds(), { padding: [40, 40] });
+      const bounds = L.latLngBounds(routes.flatMap((r) => r.vertices));
+      state.map.fitBounds(bounds, { padding: [40, 40] });
       el.weatherCard.scrollTop = 0;
     }, 320);
     return true;
@@ -897,6 +943,64 @@ async function calculateRoute({ fromHere = false, reroute = false } = {}) {
       el.btnCalcRoute.textContent = "Calcular ruta";
     }
   }
+}
+
+const TRAFFIC_LABEL = { bajo: "Tránsito bajo", medio: "Tránsito medio", alto: "Tránsito alto", sd: "Tránsito s/d" };
+
+function renderRouteOptions() {
+  const routes = state.routes || [];
+  el.routeOptions.classList.toggle("hidden", routes.length < 2);
+  el.routeResult.classList.toggle("multi", routes.length > 1);
+  el.routeOptions.innerHTML = routes
+    .map((r, i) => {
+      const t = r.traffic;
+      const bike = t.cyclewayShare >= 0.05 ? `<span class="opt-meta">🚴 ${Math.round(t.cyclewayShare * 100)}% ciclovía</span>` : "";
+      return `<button class="route-option ${r === state.route ? "selected" : ""}" data-idx="${i}">
+        <div class="opt-main">
+          <span class="opt-time">${formatDuration(r.duration)}</span>
+          <span class="opt-dist">${formatDistance(r.total)}${r.ascent != null ? ` · +${Math.round(r.ascent)} m` : ""}</span>
+        </div>
+        <div class="opt-side">
+          <span class="traffic traffic-${t.level}">${TRAFFIC_LABEL[t.level]}</span>
+          ${bike}
+          ${r.tags.length ? `<span class="opt-tags">${r.tags.join(" · ")}</span>` : ""}
+        </div>
+      </button>`;
+    })
+    .join("");
+  el.routeOptions.querySelectorAll(".route-option").forEach((b) => b.addEventListener("click", () => selectRoute(Number(b.dataset.idx))));
+}
+
+// Elegir una de las opciones: la dibuja arriba y actualiza resumen y pasos.
+function selectRoute(i) {
+  const route = state.routes?.[i];
+  if (!route || state.isNavigating) return;
+  state.route = route;
+  drawRoute(route);
+  renderRouteOptions();
+
+  const origin = state.routeOrigin;
+  const etaDate = new Date(Date.now() + route.duration * 1000);
+  el.routeDistance.textContent = formatDistance(route.total);
+  el.routeDuration.textContent = formatDuration(route.duration);
+  el.routeEta.textContent = formatClock(etaDate);
+  el.routeVia.textContent = describeVia(route.steps);
+
+  const rain = state.weather ? getRainProbabilityForWindow(state.weather, new Date(), route.duration) : null;
+  el.routeRain.textContent = rain != null ? `lluvia ${rain}%` : "lluvia s/d";
+  updateDaylightNote(etaDate);
+
+  if (state.weather?.windDirection != null && origin) {
+    const bearing = bearingDegrees(origin.lat, origin.lon, state.destLocation.lat, state.destLocation.lon);
+    const wind = classifyWindRelative(state.weather.windDirection, bearing);
+    el.routeWind.textContent = wind.text;
+    el.routeWind.className = `wind-${wind.level}`;
+  } else {
+    el.routeWind.textContent = "viento s/d";
+  }
+
+  el.routeElevation.textContent = route.ascent != null ? `+${Math.round(route.ascent)} m` : "s/d";
+  renderStepList(route.steps);
 }
 
 // ---------------------------------------------------------------------------
@@ -982,6 +1086,7 @@ function startNavigation() {
   resetStepFlags();
 
   el.app.classList.add("navigating");
+  drawRoute(state.route); // en navegacion solo la ruta elegida (sin las grises)
   el.navBanner.classList.remove("hidden");
   el.navFooter.classList.remove("hidden");
   requestWakeLock();
@@ -1021,6 +1126,7 @@ function stopNavigation({ silent } = {}) {
   el.navBanner.classList.add("hidden");
   el.navFooter.classList.add("hidden");
   if (wasNavigating && !silent) {
+    if (state.route) drawRoute(state.route); // vuelven las opciones grises
     setSheetMode("preview");
     setTimeout(() => state.map.invalidateSize(), 50);
     if (state.route) renderStepList(state.route.steps);
