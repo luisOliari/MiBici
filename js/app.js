@@ -10,6 +10,21 @@ const ORS_KEY_STORAGE = "mibici_ors_key";
 // y calles tranquilas) para bici y monopatin.
 const ORS_PROFILE = "cycling-regular";
 
+// Como se arma y se elige la ruta segun el vehiculo. OpenRouteService no
+// tiene perfil de monopatin, asi que usamos el ciclista y ajustamos:
+// - steepness: 0 = evitar subidas todo lo posible ... 3 = no importan.
+// - speedKmh: velocidad tipica para estimar el tiempo (null = la de ORS).
+// - busyWeight / roughWeight: cuanto "cuesta" ir por avenidas con transito
+//   y por empedrado/tierra al comparar las opciones. El monopatin tiene
+//   ruedas chicas: el piso malo es peligroso y pesa mucho mas.
+const VEHICLE_ROUTING = {
+  bici: { label: "bici", steepness: 1, speedKmh: null, busyWeight: 0.8, roughWeight: 0.6 },
+  monopatin: { label: "monopatín", steepness: 0, speedKmh: 15, busyWeight: 1.2, roughWeight: 3 },
+};
+function vehicleRouting() {
+  return VEHICLE_ROUTING[state.vehicle] || VEHICLE_ROUTING.bici;
+}
+
 // Colores de la linea de ruta (ver DESIGN.md: route / route-casing / route-done)
 const ROUTE_COLOR = "#16a34a";
 const ROUTE_CASING = "#0b5d2a";
@@ -105,6 +120,12 @@ const el = {
   routeOptions: $("routeOptions"),
   routeNoKey: $("routeNoKey"),
   btnToggleLanes: $("btnToggleLanes"),
+  btnHelp: $("btnHelp"),
+  btnNavHelp: $("btnNavHelp"),
+  helpSheet: $("helpSheet"),
+  btnCloseHelp: $("btnCloseHelp"),
+  helpIntro: $("helpIntro"),
+  helpList: $("helpList"),
   gpsStatus: $("gpsStatus"),
   voiceNavControls: $("voiceNavControls"),
   btnStartNav: $("btnStartNav"),
@@ -185,8 +206,41 @@ function initMap(lat, lon) {
   // Mantener apretado (o clic derecho en PC) = elegir ese punto como destino.
   state.map.on("contextmenu", (e) => {
     if (state.isNavigating) return;
-    setDestinationFromMap(e.latlng.lat, e.latlng.lng);
+    const { lat, lng } = e.latlng;
+    L.popup({ minWidth: 190 })
+      .setLatLng(e.latlng)
+      .setContent(
+        `<div class="taller-popup">
+          <button class="btn-primary popup-btn" data-go="${lat},${lng}">Ir acá</button>
+          <button class="btn-secondary popup-btn" data-save="${lat},${lng}">🔧 Guardar taller acá</button>
+        </div>`
+      )
+      .openOn(state.map);
   });
+
+  // Botones dentro de los globos del mapa (talleres y "mantener apretado").
+  state.map.getContainer().addEventListener("click", (e) => {
+    const btn = e.target.closest(".popup-btn");
+    if (!btn) return;
+    const [lat, lon] = (btn.dataset.go || btn.dataset.save || btn.dataset.remove).split(",").map(Number);
+    state.map.closePopup();
+    if (btn.dataset.save) {
+      const name = prompt("Nombre del taller:", "Mi taller");
+      if (name === null) return;
+      saveMyTaller(lat, lon, name.trim());
+      renderTalleresLayer(state.map);
+      setStatus("Taller guardado en tu celular ⭐", null, { autoHideMs: 3000 });
+    } else if (btn.dataset.remove) {
+      removeMyTaller(lat, lon);
+      renderTalleresLayer(state.map);
+    } else {
+      const place = allTalleres().find((p) => p.lat === lat && p.lon === lon);
+      if (place) goToTaller(place);
+      else setDestinationFromMap(lat, lon);
+    }
+  }, true); // captura: los globos de Leaflet frenan el click antes de que suba
+
+  renderTalleresLayer(state.map);
 
   // Si movés el mapa con el dedo durante la navegacion, dejamos de seguirte
   // un rato (como Waze) para que puedas mirar; ◎ vuelve a centrar.
@@ -747,7 +801,7 @@ async function resolveTypedDestination() {
   return { error: "No encontré esa dirección — probá elegir una de las sugerencias" };
 }
 
-async function fetchOrsRoute(origin, dest, key, { alternatives = false } = {}) {
+async function fetchOrsRoute(origin, dest, key, { alternatives = false, plain = false } = {}) {
   const body = {
     coordinates: [
       [origin.lon, origin.lat],
@@ -756,10 +810,15 @@ async function fetchOrsRoute(origin, dest, key, { alternatives = false } = {}) {
     elevation: true,
     language: "es", // sin esto, las instrucciones de voz vienen en ingles
     instructions: true,
-    extra_info: ["waytype"], // por que tipo de calle va cada tramo (para estimar transito)
+    extra_info: ["waytype", "surface"], // tipo de calle (transito) y de piso (empedrado, tierra)
+    options: {
+      avoid_features: ["steps", "fords"], // nada de escaleras
+      profile_params: { weightings: { steepness_difficulty: vehicleRouting().steepness } },
+    },
   };
   // Hasta 3 opciones distintas (que compartan como mucho 60% del recorrido y
   // no sean mas de 60% mas largas que la mejor).
+  if (plain) delete body.options;
   if (alternatives) body.alternative_routes = { target_count: 3, share_factor: 0.6, weight_factor: 1.6 };
 
   const res = await fetch(`https://api.openrouteservice.org/v2/directions/${ORS_PROFILE}/geojson`, {
@@ -769,8 +828,10 @@ async function fetchOrsRoute(origin, dest, key, { alternatives = false } = {}) {
   });
   if (!res.ok) {
     const errBody = await res.json().catch(() => ({}));
-    // Las alternativas tienen limites (ej. viajes muy largos): si falla, pedimos una sola.
-    if (alternatives) return fetchOrsRoute(origin, dest, key);
+    // Las alternativas tienen limites (ej. viajes muy largos): si falla, pedimos una sola;
+    // y si aun asi falla, sin las opciones avanzadas (subidas/escaleras).
+    if (alternatives) return fetchOrsRoute(origin, dest, key, { plain });
+    if (!plain && res.status === 400) return fetchOrsRoute(origin, dest, key, { plain: true });
     throw new Error(errBody?.error?.message || `Error ${res.status}`);
   }
   return res.json();
@@ -780,6 +841,14 @@ async function fetchOrsRoute(origin, dest, key, { alternatives = false } = {}) {
 // principal, 3 calle comun, 4 sendero, 5 camino rural, 6 ciclovia, 7 peatonal...
 const WAYTYPE_BUSY = new Set([1, 2]);
 const WAYTYPE_CYCLEWAY = 6;
+// Pisos malos para ruedas finas/chicas (extra_info surface): 2 sin pavimentar,
+// 5 empedrado, 8-12 ripio/tierra, 15 arena, 16 chips, 17 pasto, 18 adoquin con pasto.
+const SURFACE_ROUGH = new Set([2, 5, 8, 9, 10, 11, 12, 15, 16, 17, 18]);
+
+function roughShare(feature) {
+  const summary = feature.properties.extras?.surface?.summary || [];
+  return summary.reduce((sum, s) => sum + (SURFACE_ROUGH.has(s.value) ? s.amount : 0), 0) / 100;
+}
 
 // No hay datos publicos de transito EN VIVO para Montevideo, asi que lo
 // estimamos por el tipo de calle: cuanto del recorrido va por avenidas o
@@ -815,10 +884,15 @@ function buildRouteModel(feature) {
     vertices,
     cumDist,
     total: cumDist[cumDist.length - 1],
-    duration: feature.properties.summary.duration,
+    // El monopatin va a otra velocidad que la bici que asume ORS.
+    duration: vehicleRouting().speedKmh
+      ? (cumDist[cumDist.length - 1] / 1000 / vehicleRouting().speedKmh) * 3600
+      : feature.properties.summary.duration,
     steps,
     ascent,
     traffic: trafficStats(feature),
+    rough: roughShare(feature),
+    vehicle: state.vehicle,
     tags: [],
   };
 }
@@ -826,7 +900,8 @@ function buildRouteModel(feature) {
 // Etiquetas de cada opcion y cual recomendamos: la que mejor combina tiempo
 // y tranquilidad (cada 10% del recorrido por avenidas "cuesta" como 8% mas de tiempo).
 function rankRoutes(routes) {
-  const cost = (r) => r.duration * (1 + 0.8 * (r.traffic.busyShare ?? 0));
+  const v = vehicleRouting();
+  const cost = (r) => r.duration * (1 + v.busyWeight * (r.traffic.busyShare ?? 0) + v.roughWeight * r.rough);
   const minBy = (f) => routes.reduce((best, r) => (f(r) < f(best) ? r : best), routes[0]);
   const recommended = minBy(cost);
   const fastest = minBy((r) => r.duration);
@@ -839,6 +914,8 @@ function rankRoutes(routes) {
     if (r === fastest) r.tags.push("Más rápida");
     if (r === calmest && r.traffic.busyShare != null) r.tags.push("Menos tránsito");
     if (r === flattest && r.ascent != null && r !== fastest) r.tags.push("Menos subida");
+    const smoothest = minBy((x) => x.rough);
+    if (r === smoothest && routes.some((x) => x.rough - r.rough >= 0.05)) r.tags.push("Mejor piso");
   });
   return routes.indexOf(recommended);
 }
@@ -1013,6 +1090,7 @@ function renderRouteOptions() {
         <div class="opt-side">
           <span class="traffic traffic-${t.level}">${TRAFFIC_LABEL[t.level]}</span>
           ${bike}
+          ${r.rough >= 0.05 ? `<span class="opt-meta opt-rough">⚠️ ${Math.round(r.rough * 100)}% empedrado o tierra</span>` : ""}
           ${r.tags.length ? `<span class="opt-tags">${r.tags.join(" · ")}</span>` : ""}
         </div>
       </button>`;
@@ -1368,6 +1446,79 @@ el.btnMute.addEventListener("click", () => {
   if (voiceState.muted) speechSynthesis.cancel();
 });
 
+// ---------------------------------------------------------------------------
+// "¿Dónde la arreglo?": los talleres mas cercanos a donde estas AHORA, con
+// distancia y rumbo, y un boton para que te lleve.
+// ---------------------------------------------------------------------------
+async function openHelpSheet() {
+  el.helpSheet.classList.remove("hidden");
+  el.helpList.innerHTML = '<p class="settings-help">Buscando lugares cerca…</p>';
+  await loadTalleres().catch(() => {});
+  const here = state.userLocation;
+  if (!here) {
+    el.helpList.innerHTML = '<p class="settings-help">Todavía no sé dónde estás. Activá la ubicación y probá de nuevo.</p>';
+    return;
+  }
+  el.helpIntro.textContent = state.lastFixAt ? "Lo más cerca de donde estás ahora:" : "Sin GPS: muestro lo más cerca del centro del mapa de ejemplo.";
+
+  const groups = [
+    { title: "Talleres de bici", items: nearestTalleres(here.lat, here.lon, ["taller", "mio"], 5) },
+    { title: "Estaciones de reparación y gomerías", items: nearestTalleres(here.lat, here.lon, ["estacion", "gomeria"], 3) },
+    { title: "Aire para inflar (estaciones de servicio)", items: nearestTalleres(here.lat, here.lon, ["aire"], 2) },
+  ];
+  const minutes = (m) => Math.max(1, Math.round(m / 75)); // caminando con la bici al lado, ~4,5 km/h
+
+  el.helpList.innerHTML = groups
+    .filter((g) => g.items.length)
+    .map(
+      (g) => `<h4 class="help-title">${g.title}</h4>` +
+        g.items
+          .map((p) => {
+            const where = p.a || (p.c ? `cerca de ${p.c}` : "");
+            return `<div class="help-item">
+              <span class="help-icon">${TALLER_TYPES[p.t].icon}</span>
+              <div class="help-text">
+                <div class="help-name">${escapeHtml(p.n)}</div>
+                <div class="help-sub">${formatDistance(p.dist)} ${compassWord(here.lat, here.lon, p.lat, p.lon)} · ${minutes(p.dist)} min caminando</div>
+                ${where ? `<div class="help-sub">${escapeHtml(where)}</div>` : ""}
+                ${p.h ? `<div class="help-sub">🕒 ${escapeHtml(p.h)}</div>` : ""}
+                ${p.p ? `<a class="help-sub popup-link" href="tel:${escapeHtml(p.p.split(/[\/;,]/)[0].replace(/[^\d+]/g, ""))}">📞 ${escapeHtml(p.p)}</a>` : ""}
+              </div>
+              <button class="btn-primary help-go" data-lat="${p.lat}" data-lon="${p.lon}">Ir</button>
+            </div>`;
+          })
+          .join("")
+    )
+    .join("") || '<p class="settings-help">No encontré lugares cargados.</p>';
+
+  el.helpList.querySelectorAll(".help-go").forEach((b) =>
+    b.addEventListener("click", () => {
+      const place = allTalleres().find((p) => p.lat === Number(b.dataset.lat) && p.lon === Number(b.dataset.lon));
+      el.helpSheet.classList.add("hidden");
+      if (place) goToTaller(place);
+    })
+  );
+}
+
+// Pone el taller como destino y calcula la ruta desde donde estas. Si venias
+// navegando (pinchaste en pleno viaje), sigue navegando hacia el taller.
+async function goToTaller(place) {
+  const wasNavigating = state.isNavigating;
+  if (wasNavigating) stopNavigation({ silent: true });
+  setDestModeUI("address");
+  el.destInput.value = place.n;
+  state.originLocation = null;
+  el.originInput.value = "";
+  setDestination({ lat: place.lat, lon: place.lon }, place.n);
+  state.map.setView([place.lat, place.lon], 16);
+  const ok = await calculateRoute({ fromHere: true });
+  if (ok && wasNavigating) startNavigation();
+}
+
+el.btnHelp.addEventListener("click", openHelpSheet);
+el.btnNavHelp.addEventListener("click", openHelpSheet);
+el.btnCloseHelp.addEventListener("click", () => el.helpSheet.classList.add("hidden"));
+
 // --- Selector de vehiculo ---
 el.vehicleBtns.forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -1375,6 +1526,8 @@ el.vehicleBtns.forEach((btn) => {
     btn.classList.add("active");
     state.vehicle = btn.dataset.vehicle;
     renderWeather();
+    // La ruta cambia segun el vehiculo: si ya habia una, la recalculamos.
+    if (state.routes?.length && !state.isNavigating && state.destLocation) calculateRoute();
   });
 });
 

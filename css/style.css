@@ -458,6 +458,40 @@ button { font-family: inherit; color: inherit; }
   border-radius: var(--r-lg);
 }
 
+/* ---------- Talleres / donde arreglar la bici ---------- */
+.taller-marker {
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  background: var(--ink);
+  border: 2px solid white;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 15px;
+  box-shadow: var(--shadow-float);
+}
+.taller-marker.taller-mio { background: #f59e0b; }
+.taller-marker.taller-estacion, .taller-marker.taller-gomeria { background: white; border-color: var(--ink); width: 26px; height: 26px; font-size: 13px; margin: 2px; }
+
+.taller-popup { display: flex; flex-direction: column; gap: 4px; font: 13px/1.35 var(--font); color: var(--body); }
+.taller-popup strong { font-size: 15px; color: var(--ink); }
+.popup-btn { min-height: 40px !important; padding: 8px 14px !important; font-size: 14px !important; margin-top: 6px; }
+.popup-link { color: var(--ink); font-weight: 600; text-decoration: none; }
+
+.help-body { padding: 0 16px 24px; overflow-y: auto; }
+.help-title { margin: 16px 0 4px; font-size: 13px; font-weight: 600; color: var(--body); }
+.help-item { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--canvas-soft); }
+.help-icon {
+  width: 40px; height: 40px; flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--canvas-soft);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px;
+}
+.help-text { flex: 1; min-width: 0; }
+.help-name { font-weight: 600; font-size: 16px; }
+.help-sub { display: block; font-size: 13px; color: var(--body); margin-top: 2px; }
+.help-go { width: auto; min-height: 44px; padding: 10px 20px; flex-shrink: 0; }
+.opt-rough { color: var(--warn); font-weight: 600; }
+
 /* ---------- Alertas de clima (no conviene salir) ---------- */
 .weather-alert {
   position: absolute;

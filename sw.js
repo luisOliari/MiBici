@@ -3,7 +3,7 @@
 // el cascaron de la app disponible aunque se pierda la conexion un instante.
 // Los datos en vivo (clima, rutas, POIs) siguen necesitando internet.
 
-const CACHE_NAME = "mibici-shell-v8";
+const CACHE_NAME = "mibici-shell-v9";
 const TILE_CACHE_NAME = "mibici-tiles-v1";
 const SHELL_FILES = [
   "./",
@@ -14,11 +14,13 @@ const SHELL_FILES = [
   "./js/bikelanes.js",
   "./js/intersection.js",
   "./js/voice.js",
+  "./js/talleres.js",
   "./js/app.js",
   "./vendor/leaflet.css",
   "./vendor/leaflet.js",
   "./manifest.json",
   "./data/esquinas.json", // indice de esquinas: la busqueda anda aun sin señal
+  "./data/talleres.json", // talleres y gomerias: tambien sin señal
 ];
 
 self.addEventListener("install", (event) => {
